@@ -663,9 +663,10 @@ export class CodeMChatView extends ItemView {
 		this.closeSuggest();
 		tab.scrollEl.querySelector('.codem-chat-empty')?.remove();
 
-		const userBlock = this.renderUserMessage(rawPrompt, tab.images);
+		const images = tab.images; // capture 引用：气泡渲染与 prompt blocks 都用它
 		tab.images = [];
 		this.renderPreviews();
+		const userBlock = this.renderUserMessage(rawPrompt, images);
 		this.addTurnAnchor(userBlock);
 		const st = this.renderAssistantSkeleton();
 		tab.current = st;
@@ -683,7 +684,7 @@ export class CodeMChatView extends ItemView {
 			tab.pendingContext = null;
 			// content blocks：文本 + 粘贴的图片（CodeM 识图）
 			const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: finalPrompt }];
-			for (const img of tab.images) blocks.push({ type: 'image', data: img.data, mimeType: img.mime });
+			for (const img of images) blocks.push({ type: 'image', data: img.data, mimeType: img.mime });
 			this.startTypewriter(st, tab);
 			await client.prompt(tab.sessionId, blocks);
 			this.finishTurn(st, tab);
