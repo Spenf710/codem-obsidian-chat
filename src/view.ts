@@ -201,10 +201,24 @@ export class CodeMChatView extends ItemView {
 		// 消息区（含悬浮导航按钮组）：每个 tab 一个消息容器，切换显隐
 		this.msgArea = root.createDiv({ cls: 'codem-chat-msgarea' });
 
-		// 输入容器（圆角边框内：tab 行 + 图片预览行 + textarea + 底部状态行）
+		// tab 行在输入框外面（上方）：左 tab 组，右 +/历史图标（参考 Claudian UI）
+		const tabRow = root.createDiv({ cls: 'codem-chat-tabrow' });
+		this.tabsEl = tabRow.createDiv({ cls: 'codem-chat-tabs' });
+		const tabActions = tabRow.createDiv({ cls: 'codem-chat-actions' });
+		const newBtn = tabActions.createEl('button', { cls: 'codem-chat-iconbtn' });
+		newBtn.setAttribute('aria-label', '新会话');
+		setIcon(newBtn, 'plus');
+		newBtn.onclick = () => void this.startNewSession();
+		const histBtn = tabActions.createEl('button', { cls: 'codem-chat-iconbtn' });
+		histBtn.setAttribute('aria-label', '历史会话');
+		setIcon(histBtn, 'history');
+		// mousedown preventDefault：保持输入框焦点，防 blur 处理器把刚打开的历史浮层关掉（"闪退"）
+		histBtn.addEventListener('mousedown', (e) => e.preventDefault());
+		histBtn.onclick = () => void this.toggleHistoryPanel();
+
+		// 输入容器（圆角边框内：图片预览行 + textarea + 底部状态行）
 		this.inputWrapEl = root.createDiv({ cls: 'codem-chat-inputwrap' });
 		const inputWrap = this.inputWrapEl;
-		this.tabsEl = inputWrap.createDiv({ cls: 'codem-chat-tabs' });
 		this.previewEl = inputWrap.createDiv({ cls: 'codem-chat-previews' });
 		this.previewEl.hide();
 		this.suggestEl = inputWrap.createDiv({ cls: 'codem-suggest' });
@@ -225,16 +239,6 @@ export class CodeMChatView extends ItemView {
 		this.yoloBtn = actions.createEl('button', { text: '🤖 YOLO', cls: 'codem-chat-yolo' });
 		this.yoloBtn.setAttribute('aria-label', 'yolo 模式：自动批准工具权限请求');
 		this.yoloBtn.onclick = () => this.toggleYolo();
-		const newBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
-		newBtn.setAttribute('aria-label', '新会话');
-		setIcon(newBtn, 'plus');
-		newBtn.onclick = () => void this.startNewSession();
-		const histBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
-		histBtn.setAttribute('aria-label', '历史会话');
-		setIcon(histBtn, 'history');
-		// mousedown preventDefault：保持输入框焦点，防 blur 处理器把刚打开的历史浮层关掉（"闪退"）
-		histBtn.addEventListener('mousedown', (e) => e.preventDefault());
-		histBtn.onclick = () => void this.toggleHistoryPanel();
 
 		this.bindInputEvents();
 		this.bindPaste();

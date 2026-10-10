@@ -549,3 +549,43 @@
 	margin-top: 6px;
 	display: block;
 }
+
+/* tab 行放输入框外面（上方）：左 tab 组，右图标组（覆盖先前框内样式） */
+.codem-chat-tabrow {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+.codem-chat-tabs {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-wrap: wrap;
+}
+.codem-chat-tab {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 26px;
+	justify-content: center;
+	padding: 2px 8px;
+	font-size: var(--font-ui-small);
+	line-height: 1.4;
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: border-color 100ms ease, color 100ms ease;
+}
+.codem-chat-tab:hover {
+	color: var(--text-normal);
+}
+/* active：不填充，只描边——边框颜色与输入框外边框线一致 */
+.codem-chat-tab.is-active {
+	background: var(--background-secondary);
+	border-color: var(--interactive-accent);
+	color: var(--text-normal);
+}
