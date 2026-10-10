@@ -19,7 +19,7 @@ export const VIEW_TYPE_CODEM_CHAT = 'codem-chat-view';
 const TYPE_INTERVAL = 30;
 const TOOL_RESULT_MAX_LEN = 2000;
 const FOLDER_INJECT_MAX = 12000;
-const SUGGEST_MAX = 8;
+const SUGGEST_MAX = 50;
 
 interface ToolCard {
 	itemEl: HTMLElement;
@@ -67,8 +67,13 @@ export class CodeMChatView extends ItemView {
 	private typeTimer: number | null = null;
 	private current: RenderState | null = null;
 
-	// 轮次导航
+	// 轮次导航（Claudian 圆形按钮组 + 目录浮层）
+	private msgArea!: HTMLElement;
+	private navGroup!: HTMLElement;
 	private turnCount = 0;
+	private turnPos = 0;
+	private dirEl: HTMLElement | null = null;
+	private dirOpen = false;
 
 	// 内联候选（/ 技能、@ 文件/文件夹）
 	private suggestEl: HTMLElement | null = null;
@@ -101,21 +106,12 @@ export class CodeMChatView extends ItemView {
 		root.empty();
 		root.addClass('codem-chat-root');
 
-		this.msgContainer = root.createDiv({ cls: 'codem-chat-messages' });
+		// 消息区（含悬浮导航按钮组）
+		this.msgArea = root.createDiv({ cls: 'codem-chat-msgarea' });
+		this.msgContainer = this.msgArea.createDiv({ cls: 'codem-chat-messages' });
+		this.msgContainer.addEventListener('click', () => this.closeDir());
 		this.renderEmpty();
-
-		// 导航行（轮次数字居左，会话按钮居右）——参考 Claudian 输入区布局
-		const navRow = root.createDiv({ cls: 'codem-chat-navrow' });
-		this.navContainer = navRow.createDiv({ cls: 'codem-chat-nav' });
-		const actions = navRow.createDiv({ cls: 'codem-chat-actions' });
-		const newBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
-		newBtn.setAttribute('aria-label', '新会话');
-		setIcon(newBtn, 'plus');
-		newBtn.onclick = () => this.startNewSession();
-		const histBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
-		histBtn.setAttribute('aria-label', '历史会话');
-		setIcon(histBtn, 'history');
-		histBtn.onclick = () => void this.openSessionPicker();
+		this.buildNavGroup();
 
 		// 输入容器（圆角边框内：textarea + 底部状态行）
 		const inputWrap = root.createDiv({ cls: 'codem-chat-inputwrap' });
@@ -188,9 +184,84 @@ export class CodeMChatView extends ItemView {
 		});
 	}
 
+	/** 右侧悬浮圆形导航按钮组（参考 Claudian）：⏫ ^ ☰ v ⏬ */
+	private buildNavGroup(): void {
+		this.navGroup = this.msgArea.createDiv({ cls: 'codem-chat-navgroup' });
+		const mk = (icon: string, label: string, onclick: () => void): void => {
+			const b = this.navGroup.createEl('button', { cls: 'codem-chat-navcircle' });
+			b.setAttribute('aria-label', label);
+			setIcon(b, icon);
+			b.onclick = onclick;
+		};
+		mk('chevrons-up', '第一轮', () => this.goToTurn(1));
+		mk('chevron-up', '上一轮', () => this.stepTurn(-1));
+		mk('list', '会话目录', () => this.toggleDir());
+		mk('chevron-down', '下一轮', () => this.stepTurn(1));
+		mk('chevrons-down', '最新一轮', () => this.goToTurn(this.turnCount));
+	}
+
+	/** 跳转到第 n 轮用户消息（滚动定位 + 高亮闪烁） */
+	private goToTurn(n: number): void {
+		if (this.turnCount === 0) return;
+		n = Math.min(this.turnCount, Math.max(1, n));
+		const target = this.msgContainer.querySelector(`[data-codem-turn="${n}"]`);
+		if (!target) return;
+		this.turnPos = n;
+		(target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+		target.addClass('codem-chat-flash');
+		window.setTimeout(() => target.removeClass('codem-chat-flash'), 1000);
+	}
+
+	private stepTurn(delta: number): void {
+		if (this.turnCount === 0) return;
+		this.goToTurn(this.turnPos === 0 ? (delta > 0 ? 1 : this.turnCount) : this.turnPos + delta);
+	}
+
+	private toggleDir(): void {
+		if (this.dirOpen) this.closeDir();
+		else this.openDir();
+	}
+
+	/** 会话目录浮层：列出全部用户轮次（编号 + 首行摘要），点击跳转 */
+	private openDir(): void {
+		if (this.turnCount === 0) {
+			new Notice('当前会话还没有轮次');
+			return;
+		}
+		if (!this.dirEl) this.dirEl = this.msgArea.createDiv({ cls: 'codem-chat-dir' });
+		this.buildDirList();
+		this.dirEl.style.display = 'block';
+		this.dirOpen = true;
+	}
+
+	private buildDirList(): void {
+		if (!this.dirEl) return;
+		this.dirEl.empty();
+		this.dirEl.createDiv({ cls: 'codem-chat-dir-title', text: '会话目录' });
+		const list = this.dirEl.createDiv({ cls: 'codem-chat-dir-list' });
+		for (let n = 1; n <= this.turnCount; n++) {
+			const el = this.msgContainer.querySelector(`[data-codem-turn="${n}"]`);
+			if (!el) continue;
+			const snip = el.getAttribute('data-codem-snip') || `第 ${n} 轮`;
+			const row = list.createDiv({ cls: 'codem-chat-dir-item' });
+			row.createSpan({ cls: 'codem-chat-dir-n', text: `${n}.` });
+			row.createSpan({ cls: 'codem-chat-dir-snip', text: snip });
+			row.onclick = () => {
+				this.goToTurn(n);
+				this.closeDir();
+			};
+		}
+	}
+
+	private closeDir(): void {
+		this.dirOpen = false;
+		if (this.dirEl) this.dirEl.style.display = 'none';
+	}
+
 	private resetTurnNav(): void {
 		this.turnCount = 0;
-		this.navContainer.empty();
+		this.turnPos = 0;
+		this.closeDir();
 	}
 
 	private startNewSession(): void {
@@ -307,19 +378,13 @@ export class CodeMChatView extends ItemView {
 		return userBlock;
 	}
 
-	/** 轮次导航锚点：输入区上方数字按钮，点击滚动定位到对应用户消息 */
+	/** 轮次锚点：记录序号与摘要供导航按钮组/目录浮层使用 */
 	private addTurnAnchor(userBlock: HTMLElement): void {
 		this.turnCount++;
 		const n = this.turnCount;
 		userBlock.setAttribute('data-codem-turn', String(n));
-		const btn = this.navContainer.createEl('button', { text: String(n), cls: 'codem-chat-nav-btn' });
-		btn.onclick = () => {
-			const target = this.msgContainer.querySelector(`[data-codem-turn="${n}"]`);
-			if (!target) return;
-			(target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
-			target.addClass('codem-chat-flash');
-			window.setTimeout(() => target.removeClass('codem-chat-flash'), 1200);
-		};
+		userBlock.setAttribute('data-codem-snip', (userBlock.textContent ?? '').replace(/\s+/g, ' ').slice(0, 60));
+		if (this.dirOpen) this.buildDirList();
 	}
 
 	private renderAssistantSkeleton(): RenderState {
@@ -573,6 +638,9 @@ export class CodeMChatView extends ItemView {
 			});
 		});
 		this.suggestEl.show();
+		// 高亮行跟随键盘导航滚动进可视区
+		const active = this.suggestEl.querySelector('.codem-suggest-item.is-active');
+		active?.scrollIntoView({ block: 'nearest' });
 	}
 
 	private applySuggest(): void {
@@ -619,19 +687,38 @@ export class CodeMChatView extends ItemView {
 		try {
 			const turns = await readCodemSessionTurns(card.filePath);
 			const client = await this.ensureClient();
-			try {
-				await client.loadSession(card.sessionId);
+			// cwd 必须传会话自己的原始 cwd（探针实测：会话按 cwd hash 隔离，传错目录报 does not exist）；
+			// "active writer" 冲突多为会话被其他 CodeM 入口占用，延迟重试一次
+			let loaded = false;
+			let lastErr = '';
+			for (let attempt = 0; attempt < 2 && !loaded; attempt++) {
+				try {
+					await client.loadSession(card.sessionId, card.cwd || undefined);
+					loaded = true;
+				} catch (e) {
+					lastErr = e instanceof Error ? e.message : String(e);
+					if (attempt === 0) await new Promise((r) => window.setTimeout(r, 1500));
+				}
+			}
+			if (loaded) {
 				this.sessionId = card.sessionId;
-			} catch {
+			} else {
 				this.sessionId = null;
-				new Notice('该会话无法续接（可能为飞书/旧入口会话），仅回显');
+				new Notice(
+					/active writer/i.test(lastErr)
+						? '该会话正被其他 CodeM 入口占用，关掉占用方后重试可续接（本次仅回显）'
+						: '该会话无法续接，仅回显'
+				);
 			}
 			this.msgContainer.empty();
 			for (const t of turns) this.renderHistoryTurn(t);
 			if (!turns.length) this.renderEmpty();
 			const head = this.msgContainer.createDiv({ cls: 'codem-chat-history-head' });
 			const src = card.source === 'bot' ? '飞书' : card.source === 'tui' ? '终端' : 'CLI';
-			head.setText(`📜 ${card.firstPrompt.slice(0, 40)}（${src} · ${card.userTurns} 问）${this.sessionId ? ' · 已续接，可直接继续提问' : ''}`);
+			head.setText(
+				`📜 ${card.firstPrompt.slice(0, 40)}（${src} · ${card.userTurns} 问）` +
+					(this.sessionId ? ' · 已续接，可直接继续提问' : ' · 仅回显（续接失败）')
+			);
 			this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
 		} finally {
 			this.busy = false;
