@@ -682,9 +682,14 @@ export class CodeMChatView extends ItemView {
 				? `[背景] 以下是此前一次对话的快照（用户/助手交替），请据此理解本次问题：\n${tab.pendingContext}\n\n[本次问题]\n${injected}`
 				: injected;
 			tab.pendingContext = null;
-			// content blocks：文本 + 粘贴的图片（CodeM 识图）
-			const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: finalPrompt }];
-			for (const img of images) blocks.push({ type: 'image', data: img.data, mimeType: img.mime });
+			// 图片发送：CodeM 0.1.224 ACP 不支持 image prompt block（探针实测报
+			// "image prompt blocks are not supported"），改 base64 data URI 内嵌文本，
+			// CodeM 自行解码识图（探针验证可走通完整识图流程）
+			let promptText = finalPrompt;
+			images.forEach((img, i) => {
+				promptText += `\n\n[图片附件${i + 1}]（base64 编码，请读取并分析图片内容）\ndata:${img.mime};base64,${img.data}`;
+			});
+			const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: promptText }];
 			this.startTypewriter(st, tab);
 			await client.prompt(tab.sessionId, blocks);
 			this.finishTurn(st, tab);
