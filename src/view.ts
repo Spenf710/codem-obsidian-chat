@@ -144,6 +144,8 @@ export class CodeMChatView extends ItemView {
 		const histBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
 		histBtn.setAttribute('aria-label', '历史会话');
 		setIcon(histBtn, 'history');
+		// mousedown preventDefault：保持输入框焦点，防 blur 处理器把刚打开的历史浮层关掉（"闪退"）
+		histBtn.addEventListener('mousedown', (e) => e.preventDefault());
 		histBtn.onclick = () => void this.toggleHistoryPanel();
 
 		this.bindInputEvents();
@@ -206,6 +208,9 @@ export class CodeMChatView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.stopTypewriter();
+		// 先释放会话再杀进程：不清 writer 会导致下次打开视图 load 同会话报 active writer
+		this.releaseSession();
+		await new Promise((r) => window.setTimeout(r, 120));
 		this.client?.stop();
 		this.client = null;
 	}
@@ -302,10 +307,21 @@ export class CodeMChatView extends ItemView {
 			new Notice('CodeM 执行中，等本轮结束后再开新会话');
 			return;
 		}
-		this.sessionId = null;
+		this.releaseSession();
 		this.msgContainer.empty();
 		this.resetTurnNav();
 		this.renderEmpty();
+	}
+
+	/** 释放当前连接持有的会话（session/close），防 daemon 层 writer 占位堵死后续 load */
+	private releaseSession(): void {
+		const sid = this.sessionId;
+		this.sessionId = null;
+		if (sid && this.client) {
+			this.client.closeSession(sid).catch(() => {
+				// 已被占用/未知会话等场景忽略
+			});
+		}
 	}
 
 	private toggleYolo(): void {
@@ -624,8 +640,9 @@ export class CodeMChatView extends ItemView {
 		// 异步加载期间输入可能已变化
 		if (this.suggestPrefix !== '/') return;
 		const q = query.toLowerCase();
+		// 名称与中文描述都参与检索（如搜「周报」命中 weekly-report）
 		const items: SuggestItem[] = this.skillsCache
-			.filter((s) => s.name.toLowerCase().includes(q))
+			.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q))
 			.slice(0, SUGGEST_MAX)
 			.map((s) => ({ label: `/${s.name}`, desc: s.description, insert: `/${s.name} ` }));
 		this.renderSuggestList(items);
@@ -717,7 +734,13 @@ export class CodeMChatView extends ItemView {
 		this.histEl.createDiv({ cls: 'codem-hist-loading', text: '扫描 ~/.codem/sessions …' });
 		this.histEl.style.display = 'block';
 		this.histOpen = true;
-		this.allCards = await listCodemSessions();
+		try {
+			this.allCards = await listCodemSessions();
+		} catch (e) {
+			new Notice(`扫描历史会话失败：${e instanceof Error ? e.message : String(e)}`);
+			this.closeHistory();
+			return;
+		}
 		if (!this.histOpen) return; // 异步期间已关闭
 		this.histIndex = 0;
 		this.filterHistory();
@@ -742,8 +765,9 @@ export class CodeMChatView extends ItemView {
 		this.histIndex = Math.min(this.histIndex, this.histItems.length - 1);
 		this.histItems.forEach((c, i) => {
 			const src = c.source === 'bot' ? '飞书' : c.source === 'tui' ? '终端' : 'CLI';
+			const turnTxt = c.userTurns > 0 ? ` · ${c.userTurns}问` : '';
 			const row = this.histEl!.createDiv({ cls: 'codem-suggest-item' + (i === this.histIndex ? ' is-active' : '') });
-			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src} · ${c.userTurns}问` });
+			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src}${turnTxt}` });
 			row.createSpan({ cls: 'codem-suggest-desc', text: c.firstPrompt });
 			row.addEventListener('mousedown', (e) => e.preventDefault());
 			row.addEventListener('click', () => {
@@ -770,16 +794,35 @@ export class CodeMChatView extends ItemView {
 			const turns = await readCodemSessionTurns(card.filePath);
 			const client = await this.ensureClient();
 			// cwd 必须传会话自己的原始 cwd（探针实测：会话按 cwd hash 隔离，传错目录报 does not exist）；
-			// "active writer" 冲突多为会话被其他 CodeM 入口占用，延迟重试一次
+			// 换会话前先释放本连接持有的旧会话（daemon 层 writer 占位会堵死旧会话下次 load）
+			if (this.sessionId && this.sessionId !== card.sessionId) {
+				this.releaseSession();
+			}
 			let loaded = false;
 			let lastErr = '';
+			if (this.sessionId === card.sessionId) {
+				// 同一会话且当前连接仍持有 → 无需重新 load，秒开
+				loaded = true;
+			}
 			for (let attempt = 0; attempt < 2 && !loaded; attempt++) {
 				try {
 					await client.loadSession(card.sessionId, card.cwd || undefined);
 					loaded = true;
 				} catch (e) {
 					lastErr = e instanceof Error ? e.message : String(e);
-					if (attempt === 0) await new Promise((r) => window.setTimeout(r, 1500));
+					// 探针实测两类占用：
+					// ① "already active in this ACP connection"（本连接 prompt/新会话过）→ close 释放后立即可 load
+					// ② "Session already has an active writer"（外部进程占用）→ 等待无用，直接转快照
+					if (/already active in this ACP connection/i.test(lastErr)) {
+						try {
+							await client.closeSession(card.sessionId);
+						} catch {
+							// close 失败则重试也无意义
+							break;
+						}
+					} else {
+						break;
+					}
 				}
 			}
 			if (loaded) {

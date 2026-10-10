@@ -219,9 +219,23 @@ export class AcpClient {
 		await this.request('session/load', { sessionId, cwd: cwd ?? this.opts.cwd, mcpServers: [] });
 	}
 
+	/** 关闭并释放会话（initialize 返回 sessionCapabilities.close）。load 新会话前调用，防 writer 冲突 */
+	async closeSession(sessionId: string): Promise<void> {
+		await this.ensureStarted();
+		await this.request('session/close', { sessionId });
+	}
+
 	stop(): void {
-		this.child?.kill();
+		const pid = this.child?.pid;
 		this.child = null;
 		this.initialized = false;
+		if (!pid) return;
+		// cmd /c 包装下孙子进程（node codem.js）不会被 kill 级联杀死，残留进程仍占 daemon writer；
+		// taskkill /T 杀整棵进程树
+		try {
+			spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+		} catch {
+			// spawn taskkill 失败则放弃（进程随 CodeM daemon 空闲策略自行退出）
+		}
 	}
 }
