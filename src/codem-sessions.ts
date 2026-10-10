@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-// ===== CodeM 会话数据层（移植自猛士驾驶舱 codemScanner，精简版） =====
+// ===== CodeM 会话数据层（jsonl 会话文件解析，精简版） =====
 // 数据源：~/.codem/sessions/<hash>/<sessionId>.jsonl（文件名即 sessionId，ACP session/load 可直接续接）
 // 事件类型：header / user_message / user_invocation / turn_response / tool_call / tool_result
 

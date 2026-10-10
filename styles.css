@@ -475,32 +475,9 @@
 	-webkit-user-select: text;
 }
 
-/* 会话 tab 行（输入框上方，参考 Claudian 数字 tab） */
-.codem-chat-tabs {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	flex-wrap: wrap;
-	margin-bottom: 6px;
-}
+/* 会话 tab 行（输入框上方）：基础结构；外观细节在下方 tabrow 段覆盖 */
 .codem-chat-tabs:empty {
 	display: none;
-}
-.codem-chat-tab {
-	display: inline-flex;
-	align-items: center;
-	gap: 5px;
-	padding: 2px 8px;
-	font-size: var(--font-ui-small);
-	border-radius: 6px;
-	border: 1px solid var(--background-modifier-border);
-	background: var(--background-secondary);
-	color: var(--text-normal);
-	cursor: pointer;
-}
-.codem-chat-tab.is-active {
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
 }
 .codem-chat-tab-close {
 	font-size: 1.1em;
