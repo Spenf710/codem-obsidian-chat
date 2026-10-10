@@ -198,6 +198,11 @@ export class CodeMChatView extends ItemView {
 		root.empty();
 		root.addClass('codem-chat-root');
 
+		// 平台检测：spawn/codem.cmd/taskkill 均为 Windows 形态，非 Windows 无法运行
+		if (process.platform !== 'win32') {
+			new Notice('CodeM Chat 当前仅支持 Windows（依赖 codem.cmd 与 taskkill），无法在此平台启动。');
+		}
+
 		// 消息区（含悬浮导航按钮组）：每个 tab 一个消息容器，切换显隐
 		this.msgArea = root.createDiv({ cls: 'codem-chat-msgarea' });
 

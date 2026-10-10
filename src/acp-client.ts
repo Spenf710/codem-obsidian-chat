@@ -35,7 +35,7 @@ export function expandPath(p: string): string {
 export function findNodeDir(userOverride?: string): string | null {
 	if (userOverride?.trim()) return userOverride.trim();
 	const candidates = [
-		...(process.env.PATH ?? '').split(';'),
+		...(process.env.PATH ?? '').split(path.delimiter),
 		'C:\\Program Files\\nodejs',
 		'C:\\Program Files (x86)\\nodejs',
 		path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'nodejs'),
@@ -69,10 +69,12 @@ export async function runCodemHeadless(opts: AcpOptions, prompt: string, timeout
 	const nodeDir = findNodeDir(opts.nodePath);
 	const sysDirs = ['C:\\Windows\\System32', 'C:\\Windows'];
 	if (nodeDir) sysDirs.push(nodeDir);
-	env.PATH = [...sysDirs, env.PATH ?? ''].join(';');
+	env.PATH = [...sysDirs, env.PATH ?? ''].join(path.delimiter);
 	const comspec = env.ComSpec && fs.existsSync(env.ComSpec) ? env.ComSpec : 'C:\\Windows\\System32\\cmd.exe';
+	// cmd /c 参数元字符消毒：&|^<>()% 会被 cmd 解释（命令注入/报错），替换为空格
+	const safePrompt = prompt.replace(/[&|^<>()%]/g, ' ');
 	return new Promise((resolve) => {
-		const child = spawn(comspec, ['/c', expandPath(opts.cliPath), '-p', prompt], {
+		const child = spawn(comspec, ['/c', expandPath(opts.cliPath), '-p', safePrompt], {
 			cwd: opts.cwd,
 			windowsHide: true,
 			env,
@@ -144,7 +146,7 @@ export class AcpClient {
 		const nodeDir = findNodeDir(this.opts.nodePath);
 		const sysDirs = ['C:\\Windows\\System32', 'C:\\Windows'];
 		if (nodeDir) sysDirs.push(nodeDir);
-		env.PATH = [...sysDirs, env.PATH ?? ''].join(';');
+		env.PATH = [...sysDirs, env.PATH ?? ''].join(path.delimiter);
 		const comspec = env.ComSpec && fs.existsSync(env.ComSpec) ? env.ComSpec : 'C:\\Windows\\System32\\cmd.exe';
 		const extra = this.opts.extraArgs?.trim() ? this.opts.extraArgs.trim().split(/\s+/) : [];
 		// .cmd 必须经 cmd /c 启动；绝对路径防宿主 PATH 残缺

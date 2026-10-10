@@ -20,6 +20,7 @@ Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat, in a Claud
 
 ## Prerequisites / 前置要求
 
+- **Windows 10/11**（当前版本仅支持 Windows：CodeM CLI 以 `codem.cmd` 形态发行，插件经 `cmd /c` 启动、`taskkill` 结束进程树）
 - Obsidian ≥ 1.5.0（desktop only，依赖本地进程）
 - 已安装并登录 CodeM CLI（`~/.codem/bin/codem.cmd`，支持在设置中自定义路径）
 - Node.js（用于启动 CodeM CLI，支持在设置中指定目录，默认自动探测）
