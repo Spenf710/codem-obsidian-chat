@@ -150,6 +150,8 @@
 }
 
 .codem-chat-dir-list {
+	flex: 1;
+	min-height: 0;
 	overflow-y: auto;
 	padding: 4px;
 }
@@ -271,6 +273,7 @@
 	border-radius: 6px;
 	cursor: pointer;
 	font-size: var(--font-ui-small);
+	min-width: 0;
 }
 
 .codem-suggest-item.is-active {
@@ -280,6 +283,13 @@
 .codem-suggest-label {
 	font-weight: 500;
 	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+/* 历史会话面板：整体单行不换行 */
+.codem-hist-panel .codem-suggest-item {
+	white-space: nowrap;
+	overflow: hidden;
 }
 
 .codem-suggest-desc {

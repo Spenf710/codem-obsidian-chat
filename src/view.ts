@@ -12,7 +12,7 @@ import {
 	type SkillInfo,
 	type Turn,
 } from './codem-sessions';
-import { SessionPickerModal } from './pickers';
+import { formatTime } from './pickers';
 
 export const VIEW_TYPE_CODEM_CHAT = 'codem-chat-view';
 
@@ -75,6 +75,15 @@ export class CodeMChatView extends ItemView {
 	private dirEl: HTMLElement | null = null;
 	private dirOpen = false;
 
+	// 历史会话内联浮层（与 @ / 的候选浮层同款式）+ 软续接快照
+	private inputWrapEl!: HTMLElement;
+	private histEl: HTMLElement | null = null;
+	private histOpen = false;
+	private allCards: SessionCard[] = [];
+	private histItems: SessionCard[] = [];
+	private histIndex = 0;
+	private pendingContext: string | null = null;
+
 	// 内联候选（/ 技能、@ 文件/文件夹）
 	private suggestEl: HTMLElement | null = null;
 	private suggestItems: SuggestItem[] = [];
@@ -114,7 +123,8 @@ export class CodeMChatView extends ItemView {
 		this.buildNavGroup();
 
 		// 输入容器（圆角边框内：textarea + 底部状态行）
-		const inputWrap = root.createDiv({ cls: 'codem-chat-inputwrap' });
+		this.inputWrapEl = root.createDiv({ cls: 'codem-chat-inputwrap' });
+		const inputWrap = this.inputWrapEl;
 		this.suggestEl = inputWrap.createDiv({ cls: 'codem-suggest' });
 		this.suggestEl.hide();
 		this.inputEl = inputWrap.createEl('textarea', {
@@ -134,35 +144,45 @@ export class CodeMChatView extends ItemView {
 		const histBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
 		histBtn.setAttribute('aria-label', '历史会话');
 		setIcon(histBtn, 'history');
-		histBtn.onclick = () => void this.openSessionPicker();
+		histBtn.onclick = () => void this.toggleHistoryPanel();
 
 		this.bindInputEvents();
 	}
 
 	private bindInputEvents(): void {
 		this.inputEl.addEventListener('keydown', (e) => {
-			// 内联候选开启时优先响应
-			if (this.suggestPrefix !== null && this.suggestItems.length > 0) {
-				if (e.key === 'ArrowDown') {
+			const suggestActive = this.suggestPrefix !== null && this.suggestItems.length > 0;
+			const histActive = this.histOpen && this.histItems.length > 0;
+			// 内联浮层（候选/历史）开启时优先响应；composing 中不抢键（IME 选字需要 Enter/数字键）
+			if ((suggestActive || histActive) && !e.isComposing) {
+				const count = histActive ? this.histItems.length : this.suggestItems.length;
+				const move = (delta: number): void => {
 					e.preventDefault();
-					this.suggestIndex = (this.suggestIndex + 1) % this.suggestItems.length;
-					this.renderSuggestList(this.suggestItems);
-					return;
-				}
-				if (e.key === 'ArrowUp') {
-					e.preventDefault();
-					this.suggestIndex = (this.suggestIndex - 1 + this.suggestItems.length) % this.suggestItems.length;
-					this.renderSuggestList(this.suggestItems);
-					return;
-				}
+					if (histActive) {
+						this.histIndex = (this.histIndex + delta + count) % count;
+						this.renderHistoryPanel();
+					} else {
+						this.suggestIndex = (this.suggestIndex + delta + count) % count;
+						this.renderSuggestList(this.suggestItems);
+					}
+				};
+				if (e.key === 'ArrowDown') return move(1);
+				if (e.key === 'ArrowUp') return move(-1);
 				if (e.key === 'Enter' || e.key === 'Tab') {
 					e.preventDefault();
-					this.applySuggest();
+					if (histActive) {
+						const card = this.histItems[this.histIndex];
+						this.closeHistory();
+						if (card) void this.loadHistory(card);
+					} else {
+						this.applySuggest();
+					}
 					return;
 				}
 				if (e.key === 'Escape') {
 					e.preventDefault();
-					this.closeSuggest();
+					if (histActive) this.closeHistory();
+					else this.closeSuggest();
 					return;
 				}
 			}
@@ -171,12 +191,16 @@ export class CodeMChatView extends ItemView {
 				void this.send();
 			}
 		});
-		this.inputEl.addEventListener('input', (e) => {
-			if ((e as InputEvent).isComposing) return;
+		// 不跳过 composing 的 input：中文输入法敲 @ 或 / 也能立刻激活浮层
+		this.inputEl.addEventListener('input', () => {
 			this.updateSuggest();
+			if (this.histOpen) this.filterHistory();
 		});
 		this.inputEl.addEventListener('blur', () => {
-			window.setTimeout(() => this.closeSuggest(), 120);
+			window.setTimeout(() => {
+				this.closeSuggest();
+				this.closeHistory();
+			}, 120);
 		});
 	}
 
@@ -239,7 +263,7 @@ export class CodeMChatView extends ItemView {
 		}
 		if (!this.dirEl) this.dirEl = this.msgArea.createDiv({ cls: 'codem-chat-dir' });
 		this.buildDirList();
-		this.dirEl.style.display = 'block';
+		this.dirEl.style.display = 'flex';
 		this.dirOpen = true;
 	}
 
@@ -337,8 +361,13 @@ export class CodeMChatView extends ItemView {
 			const client = await this.ensureClient();
 			if (!this.sessionId) this.sessionId = await client.newSession();
 			const injected = await this.resolveNoteContexts(rawPrompt);
+			// 软续接：历史快照作为背景随本轮 prompt 附带
+			const finalPrompt = this.pendingContext
+				? `[背景] 以下是此前一次对话的快照（用户/助手交替），请据此理解本次问题：\n${this.pendingContext}\n\n[本次问题]\n${injected}`
+				: injected;
+			this.pendingContext = null;
 			this.startTypewriter(st);
-			await client.prompt(this.sessionId, injected);
+			await client.prompt(this.sessionId, finalPrompt);
 			this.finishTurn(st);
 		} catch (e) {
 			this.stopTypewriter();
@@ -671,23 +700,67 @@ export class CodeMChatView extends ItemView {
 		if (this.suggestEl) this.suggestEl.hide();
 	}
 
-	// ===== 历史会话追溯 =====
+	// ===== 历史会话追溯（内联浮层 + 软续接兜底） =====
 
-	private async openSessionPicker(): Promise<void> {
+	private async toggleHistoryPanel(): Promise<void> {
+		if (this.histOpen) {
+			this.closeHistory();
+			return;
+		}
 		if (this.busy) {
 			new Notice('CodeM 执行中，稍后再切换会话');
 			return;
 		}
-		new Notice('扫描 ~/.codem/sessions …');
-		const cards = await listCodemSessions();
-		if (!cards.length) {
-			new Notice('未找到任何 CodeM 会话记录');
-			return;
-		}
-		new SessionPickerModal(this.app, cards, (c) => void this.loadHistory(c)).open();
+		this.closeSuggest();
+		if (!this.histEl) this.histEl = this.inputWrapEl.createDiv({ cls: 'codem-suggest codem-hist-panel' });
+		this.histEl.empty();
+		this.histEl.createDiv({ cls: 'codem-hist-loading', text: '扫描 ~/.codem/sessions …' });
+		this.histEl.style.display = 'block';
+		this.histOpen = true;
+		this.allCards = await listCodemSessions();
+		if (!this.histOpen) return; // 异步期间已关闭
+		this.histIndex = 0;
+		this.filterHistory();
+		this.inputEl.focus();
 	}
 
-	/** 载入历史会话：jsonl 回显 + ACP session/load 续接 */
+	/** 输入内容实时过滤历史会话（按首问子串） */
+	private filterHistory(): void {
+		const q = this.inputEl.value.trim().toLowerCase();
+		this.histItems = q ? this.allCards.filter((c) => c.firstPrompt.toLowerCase().includes(q)) : this.allCards;
+		this.histIndex = 0;
+		this.renderHistoryPanel();
+	}
+
+	private renderHistoryPanel(): void {
+		if (!this.histEl) return;
+		this.histEl.empty();
+		if (!this.histItems.length) {
+			this.histEl.createDiv({ cls: 'codem-hist-loading', text: '没有匹配的历史会话' });
+			return;
+		}
+		this.histIndex = Math.min(this.histIndex, this.histItems.length - 1);
+		this.histItems.forEach((c, i) => {
+			const src = c.source === 'bot' ? '飞书' : c.source === 'tui' ? '终端' : 'CLI';
+			const row = this.histEl!.createDiv({ cls: 'codem-suggest-item' + (i === this.histIndex ? ' is-active' : '') });
+			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src} · ${c.userTurns}问` });
+			row.createSpan({ cls: 'codem-suggest-desc', text: c.firstPrompt });
+			row.addEventListener('mousedown', (e) => e.preventDefault());
+			row.addEventListener('click', () => {
+				this.closeHistory();
+				void this.loadHistory(c);
+			});
+		});
+		const active = this.histEl.querySelector('.codem-suggest-item.is-active');
+		active?.scrollIntoView({ block: 'nearest' });
+	}
+
+	private closeHistory(): void {
+		this.histOpen = false;
+		if (this.histEl) this.histEl.style.display = 'none';
+	}
+
+	/** 载入历史会话：jsonl 回显 + ACP session/load 原生续接；失败自动转软续接（快照上下文） */
 	private async loadHistory(card: SessionCard): Promise<void> {
 		this.busy = true;
 		this.msgContainer.empty();
@@ -711,12 +784,15 @@ export class CodeMChatView extends ItemView {
 			}
 			if (loaded) {
 				this.sessionId = card.sessionId;
+				this.pendingContext = null;
 			} else {
+				// 软续接兜底：原生 load 失败（被占用/不可载入）时，把历史轮次做成快照，
+				// 随下一条用户消息注入新会话，保证任何会话都能接着聊
 				this.sessionId = null;
+				this.pendingContext = this.buildContextSnapshot(turns);
 				new Notice(
-					/active writer/i.test(lastErr)
-						? '该会话正被其他 CodeM 入口占用，关掉占用方后重试可续接（本次仅回显）'
-						: '该会话无法续接，仅回显'
+					(/active writer/i.test(lastErr) ? '该会话正被其他 CodeM 入口占用，' : '无法原生续接，') +
+						'已转为快照续聊：历史对话将作为上下文随你下一条消息附带'
 				);
 			}
 			this.msgContainer.empty();
@@ -726,12 +802,31 @@ export class CodeMChatView extends ItemView {
 			const src = card.source === 'bot' ? '飞书' : card.source === 'tui' ? '终端' : 'CLI';
 			head.setText(
 				`📜 ${card.firstPrompt.slice(0, 40)}（${src} · ${card.userTurns} 问）` +
-					(this.sessionId ? ' · 已续接，可直接继续提问' : ' · 仅回显（续接失败）')
+					(this.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
 			);
 			this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
 		} finally {
 			this.busy = false;
 		}
+	}
+
+	/** 历史轮次 → 快照文本（软续接用）：取最近 10 轮，6000 字上限 */
+	private buildContextSnapshot(turns: Turn[]): string {
+		const recent = turns.slice(-10);
+		const lines: string[] = [];
+		let total = 0;
+		for (const t of recent) {
+			const role = t.role === 'user' ? '用户' : t.role === 'assistant' ? '助手' : '工具';
+			for (const b of t.blocks) {
+				if (b.kind === 'tool_result') continue;
+				const text = `[${role}] ${b.kind === 'tool_use' ? `(${b.label}) ` : ''}${b.content}`;
+				if (total + text.length > 6000) break;
+				lines.push(text);
+				total += text.length;
+			}
+			if (total > 6000) break;
+		}
+		return lines.join('\n');
 	}
 
 	private renderHistoryTurn(t: Turn): void {
