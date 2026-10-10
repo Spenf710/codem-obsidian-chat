@@ -434,3 +434,36 @@
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
 }
+
+/* 三色灯（视图内 dot，与 tab 图标同步）：灰=静默 黄=执行中 绿=执行结束 */
+.codem-chat-light {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+.codem-chat-light.is-idle {
+	background: var(--text-faint);
+}
+.codem-chat-light.is-running {
+	background: var(--color-yellow);
+	box-shadow: 0 0 6px var(--color-yellow);
+	animation: codem-light-blink 1.2s ease-in-out infinite;
+}
+.codem-chat-light.is-done {
+	background: var(--color-green);
+}
+@keyframes codem-light-blink {
+	50% {
+		opacity: 0.35;
+	}
+}
+
+/* @ 钻取候选顶部面包屑 */
+.codem-suggest-head {
+	padding: 4px 10px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}

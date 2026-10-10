@@ -10,6 +10,8 @@ export interface CodeMSettings {
 	timeoutMs: number;
 	/** 额外 CLI 参数（空格分隔，如模型指定） */
 	extraArgs: string;
+	/** 多窗口模式：同时打开的聊天窗口上限 */
+	maxWindows: number;
 }
 
 export const DEFAULT_SETTINGS: CodeMSettings = {
@@ -17,6 +19,7 @@ export const DEFAULT_SETTINGS: CodeMSettings = {
 	nodePath: '',
 	timeoutMs: 300000,
 	extraArgs: '',
+	maxWindows: 3,
 };
 
 export class CodeMSettingTab extends PluginSettingTab {
@@ -78,6 +81,20 @@ export class CodeMSettingTab extends PluginSettingTab {
 					this.plugin.settings.extraArgs = v;
 					await this.plugin.saveSettings();
 				})
+			);
+
+		new Setting(containerEl)
+			.setName('多窗口上限')
+			.setDesc('同时打开的聊天窗口数量上限；新建会话按钮超过上限将提示')
+			.addText((text) =>
+				text
+					.setPlaceholder('3')
+					.setValue(String(this.plugin.settings.maxWindows))
+					.onChange(async (v) => {
+						const n = Number(v);
+						this.plugin.settings.maxWindows = Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_SETTINGS.maxWindows;
+						await this.plugin.saveSettings();
+					})
 			);
 	}
 }

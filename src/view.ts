@@ -45,6 +45,9 @@ interface SuggestItem {
 	label: string;
 	desc: string;
 	insert: string;
+	/** vault 路径（@ 钻取：文件夹条目 → 键下钻用） */
+	vaultPath?: string;
+	isFolder?: boolean;
 }
 
 function statusMark(s: string): string {
@@ -84,14 +87,15 @@ export class CodeMChatView extends ItemView {
 	private histIndex = 0;
 	private pendingContext: string | null = null;
 
-	// 内联候选（/ 技能、@ 文件/文件夹）
+	// 内联候选（/ 技能、@ 文件夹钻取）
 	private suggestEl: HTMLElement | null = null;
 	private suggestItems: SuggestItem[] = [];
 	private suggestIndex = 0;
 	private suggestPrefix: '/' | '@' | null = null;
 	private suggestStart = 0;
 	private skillsCache: SkillInfo[] | null = null;
-	private vaultEntries: SuggestItem[] | null = null;
+	private suggestDirPath = '';
+	private lightEl: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: CodeMChatPlugin) {
 		super(leaf);
@@ -132,6 +136,7 @@ export class CodeMChatView extends ItemView {
 			attr: { placeholder: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）', rows: 3 },
 		});
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
+		this.lightEl = bottomRow.createSpan({ cls: 'codem-chat-light is-idle' });
 		bottomRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM · ACP' });
 		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
 		this.yoloBtn = actions.createEl('button', { text: '🤖 YOLO', cls: 'codem-chat-yolo' });
@@ -140,7 +145,7 @@ export class CodeMChatView extends ItemView {
 		const newBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
 		newBtn.setAttribute('aria-label', '新会话');
 		setIcon(newBtn, 'plus');
-		newBtn.onclick = () => this.startNewSession();
+		newBtn.onclick = () => void this.startNewSession();
 		const histBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
 		histBtn.setAttribute('aria-label', '历史会话');
 		setIcon(histBtn, 'history');
@@ -149,6 +154,7 @@ export class CodeMChatView extends ItemView {
 		histBtn.onclick = () => void this.toggleHistoryPanel();
 
 		this.bindInputEvents();
+		this.setStatusLight('idle');
 	}
 
 	private bindInputEvents(): void {
@@ -170,6 +176,20 @@ export class CodeMChatView extends ItemView {
 				};
 				if (e.key === 'ArrowDown') return move(1);
 				if (e.key === 'ArrowUp') return move(-1);
+				// @ 钻取：→ 进入高亮文件夹，← 回退上一级
+				if (e.key === 'ArrowRight' && !histActive && this.suggestPrefix === '@') {
+					const it = this.suggestItems[this.suggestIndex];
+					if (it?.isFolder) {
+						e.preventDefault();
+						this.drillVaultFolder(it);
+						return;
+					}
+				}
+				if (e.key === 'ArrowLeft' && !histActive && this.suggestPrefix === '@' && this.suggestDirPath) {
+					e.preventDefault();
+					this.backVaultFolder();
+					return;
+				}
 				if (e.key === 'Enter' || e.key === 'Tab') {
 					e.preventDefault();
 					if (histActive) {
@@ -302,15 +322,47 @@ export class CodeMChatView extends ItemView {
 		this.closeDir();
 	}
 
-	private startNewSession(): void {
+	private async startNewSession(): Promise<void> {
 		if (this.busy) {
 			new Notice('CodeM 执行中，等本轮结束后再开新会话');
 			return;
 		}
-		this.releaseSession();
-		this.msgContainer.empty();
-		this.resetTurnNav();
-		this.renderEmpty();
+		// 当前窗口还没开始过对话 → 直接重置，不占窗口额度
+		if (!this.sessionId && this.turnCount === 0 && !this.pendingContext) {
+			this.releaseSession();
+			this.msgContainer.empty();
+			this.resetTurnNav();
+			this.renderEmpty();
+			this.setStatusLight('idle');
+			return;
+		}
+		// 多窗口模式：开新 leaf；到设置上限则停
+		const max = Math.max(1, this.plugin.settings.maxWindows || 3);
+		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_CODEM_CHAT);
+		if (existing.length >= max) {
+			new Notice(`已达窗口上限（${max} 个），可在设置中调整`);
+			return;
+		}
+		const leaf = this.app.workspace.getLeaf(true);
+		await leaf.setViewState({ type: VIEW_TYPE_CODEM_CHAT, active: true });
+		this.app.workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * 三色灯：灰=静默 / 黄=执行中 / 绿=执行结束。
+	 * 同步两处：视图内 dot + tab 标题图标（Obsidian 内部 tabHeaderInnerIconEl，社区插件通用做法）
+	 */
+	private setStatusLight(state: 'idle' | 'running' | 'done'): void {
+		if (this.lightEl) {
+			this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
+			this.lightEl.addClass('is-' + state);
+		}
+		const iconEl = (this.leaf as unknown as { tabHeaderInnerIconEl?: HTMLElement }).tabHeaderInnerIconEl;
+		if (iconEl) {
+			setIcon(iconEl, 'circle');
+			iconEl.style.color =
+				state === 'running' ? 'var(--color-yellow)' : state === 'done' ? 'var(--color-green)' : 'var(--text-faint)';
+		}
 	}
 
 	/** 释放当前连接持有的会话（session/close），防 daemon 层 writer 占位堵死后续 load */
@@ -348,6 +400,7 @@ export class CodeMChatView extends ItemView {
 					if (this.busy) {
 						new Notice(`CodeM 连接断开（退出码 ${code}），本轮中止`);
 						this.busy = false;
+						this.setStatusLight('idle');
 					}
 				},
 			}
@@ -362,6 +415,7 @@ export class CodeMChatView extends ItemView {
 		if (!rawPrompt || this.busy) return;
 
 		this.busy = true;
+		this.setStatusLight('running');
 		this.inputEl.value = '';
 		this.closeSuggest();
 		this.msgContainer.querySelector('.codem-chat-empty')?.remove();
@@ -403,6 +457,7 @@ export class CodeMChatView extends ItemView {
 		} finally {
 			this.current = null;
 			this.busy = false;
+			this.setStatusLight('done');
 			this.scrollBottom();
 		}
 	}
@@ -648,29 +703,59 @@ export class CodeMChatView extends ItemView {
 		this.renderSuggestList(items);
 	}
 
+	/**
+	 * @ 候选：目录钻取式。token '@a/b/过滤词' 按路径段逐级下钻到当前目录，
+	 * 列出该目录下的子文件夹（→ 下钻）与文件；回车选中插入引用。
+	 */
 	private updateVaultSuggestions(query: string): void {
-		if (!this.vaultEntries) {
-			this.vaultEntries = [];
-			for (const af of this.app.vault.getAllLoadedFiles()) {
-				if (af.path.startsWith('.obsidian')) continue;
-				if (af instanceof TFolder) {
-					if (af.path) this.vaultEntries.push({ label: `📁 ${af.path}`, desc: '文件夹', insert: `[[${af.path}]] ` });
-				}
+		const segs = query.split('/');
+		const filter = (segs.pop() ?? '').toLowerCase();
+		let dir: TFolder = this.app.vault.getRoot();
+		for (const seg of segs) {
+			if (!seg) continue;
+			const next = dir.children.find((c) => c instanceof TFolder && c.name.toLowerCase() === seg.toLowerCase());
+			if (!(next instanceof TFolder)) {
+				this.closeSuggest();
+				return;
 			}
-			for (const f of this.app.vault.getFiles()) {
-				if (f.path.startsWith('.obsidian')) continue;
-				this.vaultEntries.push({ label: f.path, desc: '', insert: `[[${f.path}]] ` });
-			}
-			// 文件夹优先，同组按路径排序
-			this.vaultEntries.sort((a, b) => {
-				const fa = a.desc === '文件夹' ? 0 : 1;
-				const fb = b.desc === '文件夹' ? 0 : 1;
-				return fa !== fb ? fa - fb : a.label.localeCompare(b.label);
-			});
+			dir = next;
 		}
-		const q = query.toLowerCase();
-		const items = this.vaultEntries.filter((it) => it.label.toLowerCase().includes(q)).slice(0, SUGGEST_MAX);
+		this.suggestDirPath = dir.path;
+		const folders = dir.children
+			.filter((c): c is TFolder => c instanceof TFolder)
+			.filter((c) => c.name.toLowerCase().includes(filter))
+			.sort((a, b) => a.name.localeCompare(b.name))
+			.map((c) => ({ label: `📁 ${c.name}`, desc: '', insert: `[[${c.path}]] `, vaultPath: c.path, isFolder: true }));
+		const files = this.app.vault
+			.getFiles()
+			.filter((f) => f.parent?.path === dir.path && !f.path.startsWith('.obsidian'))
+			.filter((f) => f.name.toLowerCase().includes(filter))
+			.sort((a, b) => a.name.localeCompare(b.name))
+			.map((f) => ({ label: f.name, desc: f.extension, insert: `[[${f.path}]] ` }));
+		const items = [...folders, ...files].slice(0, SUGGEST_MAX);
+		// 空目录/无匹配保留占位行：浮层不关，← 回退才能继续用
+		if (!items.length) items.push({ label: '（空）', desc: '← 回退上一级', insert: '' });
 		this.renderSuggestList(items);
+	}
+
+	/** → 键钻入高亮文件夹：token 替换为 '@目录/' 后重扫 */
+	private drillVaultFolder(item: SuggestItem): void {
+		const el = this.inputEl;
+		const pos = el.selectionStart ?? 0;
+		el.setRangeText('@' + (item.vaultPath ?? '') + '/', this.suggestStart, pos, 'end');
+		this.suggestIndex = 0;
+		this.updateSuggest();
+	}
+
+	/** ← 键回退上一级：去掉 token 最后一段（过滤词或目录段）后重扫 */
+	private backVaultFolder(): void {
+		const el = this.inputEl;
+		const pos = el.selectionStart ?? 0;
+		const token = el.value.slice(this.suggestStart + 1, pos);
+		const back = token.replace(/\/[^/]*$/, '');
+		el.setRangeText('@' + back + (back ? '/' : ''), this.suggestStart, pos, 'end');
+		this.suggestIndex = 0;
+		this.updateSuggest();
 	}
 
 	private renderSuggestList(items: SuggestItem[]): void {
@@ -682,6 +767,10 @@ export class CodeMChatView extends ItemView {
 		this.suggestItems = items;
 		this.suggestIndex = Math.min(this.suggestIndex, items.length - 1);
 		this.suggestEl.empty();
+		// @ 钻取：顶部显示当前目录面包屑（不占候选索引）
+		if (this.suggestPrefix === '@') {
+			this.suggestEl.createDiv({ cls: 'codem-suggest-head', text: `📁 ${this.suggestDirPath || 'Vault 根'}` });
+		}
 		items.forEach((it, i) => {
 			const row = this.suggestEl!.createDiv({ cls: 'codem-suggest-item' + (i === this.suggestIndex ? ' is-active' : '') });
 			row.createSpan({ cls: 'codem-suggest-label', text: it.label });
@@ -848,6 +937,7 @@ export class CodeMChatView extends ItemView {
 					(this.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
 			);
 			this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
+			this.setStatusLight('idle');
 		} finally {
 			this.busy = false;
 		}
