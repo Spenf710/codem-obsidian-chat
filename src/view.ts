@@ -123,9 +123,18 @@ export class CodeMChatView extends ItemView {
 		});
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
 		bottomRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM · ACP' });
-		this.yoloBtn = bottomRow.createEl('button', { text: '🤖 YOLO', cls: 'codem-chat-yolo' });
+		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
+		this.yoloBtn = actions.createEl('button', { text: '🤖 YOLO', cls: 'codem-chat-yolo' });
 		this.yoloBtn.setAttribute('aria-label', 'yolo 模式：自动批准工具权限请求');
 		this.yoloBtn.onclick = () => this.toggleYolo();
+		const newBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
+		newBtn.setAttribute('aria-label', '新会话');
+		setIcon(newBtn, 'plus');
+		newBtn.onclick = () => this.startNewSession();
+		const histBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
+		histBtn.setAttribute('aria-label', '历史会话');
+		setIcon(histBtn, 'history');
+		histBtn.onclick = () => void this.openSessionPicker();
 
 		this.bindInputEvents();
 	}

@@ -220,6 +220,32 @@
 	color: var(--text-faint);
 }
 
+.codem-chat-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.codem-chat-iconbtn {
+	padding: 2px 5px;
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+}
+
+.codem-chat-iconbtn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.codem-chat-iconbtn svg {
+	width: 15px;
+	height: 15px;
+}
+
 /* —— 内联候选下拉（/ 技能、@ 文件） —— */
 
 .codem-suggest {
