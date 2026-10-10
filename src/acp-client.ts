@@ -14,8 +14,8 @@ export interface AcpOptions {
 }
 
 export interface AcpHandlers {
-	/** session/update 通知（agent_message_chunk / agent_thought_chunk / tool_call / tool_call_update …） */
-	onUpdate?: (update: Record<string, unknown>) => void;
+	/** session/update 通知（带来源 sessionId，供多会话并行路由） */
+	onUpdate?: (sessionId: string, update: Record<string, unknown>) => void;
 	/** agent 请求权限确认，respond 回传 {outcome:{outcome:'selected',optionId}} */
 	onPermissionRequest?: (params: Record<string, unknown>, respond: (result: unknown) => void) => void;
 	/** 子进程退出 */
@@ -152,8 +152,8 @@ export class AcpClient {
 			return;
 		}
 		if (m.method === 'session/update') {
-			const params = m.params as { update?: Record<string, unknown> } | undefined;
-			if (params?.update) this.handlers.onUpdate?.(params.update);
+			const params = m.params as { sessionId?: string; update?: Record<string, unknown> } | undefined;
+			if (params?.update) this.handlers.onUpdate?.(String(params.sessionId ?? ''), params.update);
 			return;
 		}
 		if (id !== undefined) {
@@ -199,13 +199,10 @@ export class AcpClient {
 		return r.sessionId;
 	}
 
-	/** 发送一轮对话，resolve 值为 stopReason（end_turn 等）；期间经 onUpdate 流式回调 */
-	async prompt(sessionId: string, text: string): Promise<string> {
+	/** 发送一轮对话（content blocks：text / image{data,mimeType}），resolve 值为 stopReason */
+	async prompt(sessionId: string, prompt: Array<Record<string, unknown>>): Promise<string> {
 		await this.ensureStarted();
-		const r = (await this.request('session/prompt', {
-			sessionId,
-			prompt: [{ type: 'text', text }],
-		})) as { stopReason: string };
+		const r = (await this.request('session/prompt', { sessionId, prompt })) as { stopReason: string };
 		return r.stopReason;
 	}
 

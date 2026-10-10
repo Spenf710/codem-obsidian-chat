@@ -40,6 +40,29 @@ interface RenderState {
 	cards: Map<string, ToolCard>;
 }
 
+/** 待发送图片（粘贴直接进内存，base64 无 data: 前缀） */
+interface PendingImage {
+	data: string;
+	mime: string;
+}
+
+/** 视图内会话 tab：独立会话/消息 DOM/流式状态，可并行执行（三色灯） */
+interface ChatTab {
+	id: number;
+	light: 'idle' | 'running' | 'done';
+	sessionId: string | null;
+	pendingContext: string | null;
+	busy: boolean;
+	current: RenderState | null;
+	mdBuffer: string;
+	displayLen: number;
+	typeTimer: number | null;
+	turnCount: number;
+	turnPos: number;
+	images: PendingImage[];
+	scrollEl: HTMLElement;
+}
+
 /** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
 interface SuggestItem {
 	label: string;
@@ -58,23 +81,20 @@ function statusMark(s: string): string {
 export class CodeMChatView extends ItemView {
 	plugin: CodeMChatPlugin;
 	private client: AcpClient | null = null;
-	private sessionId: string | null = null;
-	private msgContainer!: HTMLElement;
-	private navContainer!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
 	private yoloBtn!: HTMLButtonElement;
-	private busy = false;
 	private yolo = false;
-	private mdBuffer = '';
-	private displayLen = 0;
-	private typeTimer: number | null = null;
-	private current: RenderState | null = null;
 
-	// 轮次导航（Claudian 圆形按钮组 + 目录浮层）
+	// 多会话 tab（视图内并行，参考 Claudian 数字 tab）
+	private tabs: ChatTab[] = [];
+	private activeTab!: ChatTab;
+	private tabCounter = 0;
+	private tabsEl!: HTMLElement;
+	private previewEl!: HTMLElement;
+
+	// 轮次导航（Claudian 圆形按钮组 + 目录浮层，切 tab 关闭）
 	private msgArea!: HTMLElement;
 	private navGroup!: HTMLElement;
-	private turnCount = 0;
-	private turnPos = 0;
 	private dirEl: HTMLElement | null = null;
 	private dirOpen = false;
 
@@ -85,7 +105,6 @@ export class CodeMChatView extends ItemView {
 	private allCards: SessionCard[] = [];
 	private histItems: SessionCard[] = [];
 	private histIndex = 0;
-	private pendingContext: string | null = null;
 
 	// 内联候选（/ 技能、@ 文件夹钻取）
 	private suggestEl: HTMLElement | null = null;
@@ -96,6 +115,66 @@ export class CodeMChatView extends ItemView {
 	private skillsCache: SkillInfo[] | null = null;
 	private suggestDirPath = '';
 	private lightEl: HTMLElement | null = null;
+
+	// ===== 会话状态代理（getter/setter 指向 activeTab，既有逻辑零改动） =====
+
+	private get sessionId(): string | null {
+		return this.activeTab.sessionId;
+	}
+	private set sessionId(v: string | null) {
+		this.activeTab.sessionId = v;
+	}
+	private get busy(): boolean {
+		return this.activeTab.busy;
+	}
+	private set busy(v: boolean) {
+		this.activeTab.busy = v;
+	}
+	private get current(): RenderState | null {
+		return this.activeTab.current;
+	}
+	private set current(v: RenderState | null) {
+		this.activeTab.current = v;
+	}
+	private get mdBuffer(): string {
+		return this.activeTab.mdBuffer;
+	}
+	private set mdBuffer(v: string) {
+		this.activeTab.mdBuffer = v;
+	}
+	private get displayLen(): number {
+		return this.activeTab.displayLen;
+	}
+	private set displayLen(v: number) {
+		this.activeTab.displayLen = v;
+	}
+	private get typeTimer(): number | null {
+		return this.activeTab.typeTimer;
+	}
+	private set typeTimer(v: number | null) {
+		this.activeTab.typeTimer = v;
+	}
+	private get turnCount(): number {
+		return this.activeTab.turnCount;
+	}
+	private set turnCount(v: number) {
+		this.activeTab.turnCount = v;
+	}
+	private get turnPos(): number {
+		return this.activeTab.turnPos;
+	}
+	private set turnPos(v: number) {
+		this.activeTab.turnPos = v;
+	}
+	private get pendingContext(): string | null {
+		return this.activeTab.pendingContext;
+	}
+	private set pendingContext(v: string | null) {
+		this.activeTab.pendingContext = v;
+	}
+	private get msgContainer(): HTMLElement {
+		return this.activeTab.scrollEl;
+	}
 
 	constructor(leaf: WorkspaceLeaf, plugin: CodeMChatPlugin) {
 		super(leaf);
@@ -119,18 +198,22 @@ export class CodeMChatView extends ItemView {
 		root.empty();
 		root.addClass('codem-chat-root');
 
-		// 消息区（含悬浮导航按钮组）
+		// 消息区（含悬浮导航按钮组）：每个 tab 一个消息容器，切换显隐
 		this.msgArea = root.createDiv({ cls: 'codem-chat-msgarea' });
-		this.msgContainer = this.msgArea.createDiv({ cls: 'codem-chat-messages' });
-		this.msgContainer.addEventListener('click', () => this.closeDir());
-		this.renderEmpty();
-		this.buildNavGroup();
 
-		// 输入容器（圆角边框内：textarea + 底部状态行）
+		// 输入容器（圆角边框内：tab 行 + 图片预览行 + textarea + 底部状态行）
 		this.inputWrapEl = root.createDiv({ cls: 'codem-chat-inputwrap' });
 		const inputWrap = this.inputWrapEl;
+		this.tabsEl = inputWrap.createDiv({ cls: 'codem-chat-tabs' });
+		this.previewEl = inputWrap.createDiv({ cls: 'codem-chat-previews' });
+		this.previewEl.hide();
 		this.suggestEl = inputWrap.createDiv({ cls: 'codem-suggest' });
 		this.suggestEl.hide();
+
+		this.activeTab = this.createTab();
+		this.renderEmpty();
+		this.buildNavGroup();
+		this.renderTabs();
 		this.inputEl = inputWrap.createEl('textarea', {
 			cls: 'codem-chat-input',
 			attr: { placeholder: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）', rows: 3 },
@@ -154,6 +237,7 @@ export class CodeMChatView extends ItemView {
 		histBtn.onclick = () => void this.toggleHistoryPanel();
 
 		this.bindInputEvents();
+		this.bindPaste();
 		this.setStatusLight('idle');
 	}
 
@@ -227,9 +311,8 @@ export class CodeMChatView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
-		this.stopTypewriter();
-		// 先释放会话再杀进程：不清 writer 会导致下次打开视图 load 同会话报 active writer
-		this.releaseSession();
+		// 先释放全部会话再杀进程：不清 writer 会导致下次打开视图 load 同会话报 active writer
+		for (const t of this.tabs) this.releaseSession(t);
 		await new Promise((r) => window.setTimeout(r, 120));
 		this.client?.stop();
 		this.client = null;
@@ -322,53 +405,198 @@ export class CodeMChatView extends ItemView {
 		this.closeDir();
 	}
 
+	// ===== 多会话 tab 管理 =====
+
+	private createTab(): ChatTab {
+		const tab: ChatTab = {
+			id: ++this.tabCounter,
+			light: 'idle',
+			sessionId: null,
+			pendingContext: null,
+			busy: false,
+			current: null,
+			mdBuffer: '',
+			displayLen: 0,
+			typeTimer: null,
+			turnCount: 0,
+			turnPos: 0,
+			images: [],
+			scrollEl: null as unknown as HTMLElement,
+		};
+		tab.scrollEl = this.msgArea.createDiv({ cls: 'codem-chat-messages' });
+		tab.scrollEl.addEventListener('click', () => this.closeDir());
+		this.tabs.push(tab);
+		return tab;
+	}
+
+	/** tab 行渲染：编号 + 三色灯 dot + 悬停 × 关闭，active 高亮 */
+	private renderTabs(): void {
+		const el = this.tabsEl;
+		el.empty();
+		this.tabs.forEach((tab, i) => {
+			const b = el.createEl('button', { cls: 'codem-chat-tab' + (tab === this.activeTab ? ' is-active' : '') });
+			const dot = b.createSpan({ cls: 'codem-chat-light' });
+			dot.addClass('is-' + tab.light);
+			b.createSpan({ text: String(i + 1) });
+			b.setAttribute('aria-label', `会话 ${i + 1}`);
+			b.onclick = () => this.switchTab(tab);
+			if (this.tabs.length > 1) {
+				const x = b.createSpan({ cls: 'codem-chat-tab-close', text: '×' });
+				x.onclick = (e) => {
+					e.stopPropagation();
+					this.removeTab(tab);
+				};
+			}
+		});
+	}
+
+	private switchTab(tab: ChatTab): void {
+		if (tab === this.activeTab) return;
+		this.closeDir();
+		this.closeSuggest();
+		this.closeHistory();
+		for (const t of this.tabs) t.scrollEl.style.display = t === tab ? '' : 'none';
+		this.activeTab = tab;
+		this.renderTabs();
+		this.renderPreviews();
+		this.setStatusLight(tab.light);
+		this.inputEl.focus();
+	}
+
+	/** 关闭 tab：释放其会话；关的是当前 tab 则切到相邻（无相邻则新建空 tab） */
+	private removeTab(tab: ChatTab): void {
+		if (tab.busy) {
+			new Notice('该会话执行中，等本轮结束再关');
+			return;
+		}
+		this.releaseSession(tab);
+		const idx = this.tabs.indexOf(tab);
+		if (idx < 0) return;
+		this.tabs.splice(idx, 1);
+		tab.scrollEl.remove();
+		if (tab === this.activeTab) {
+			const next = this.tabs[Math.min(idx, this.tabs.length - 1)];
+			if (next) {
+				this.switchTab(next);
+			} else {
+				this.activeTab = this.createTab();
+				this.renderEmpty();
+				this.setStatusLight('idle');
+			}
+		}
+		this.renderTabs();
+	}
+
+	/** 重置当前 tab 为空会话（不占 tab 槽位） */
+	private resetActiveTab(): void {
+		const tab = this.activeTab;
+		this.releaseSession(tab);
+		tab.pendingContext = null;
+		tab.mdBuffer = '';
+		tab.displayLen = 0;
+		if (tab.typeTimer !== null) {
+			window.clearInterval(tab.typeTimer);
+			tab.typeTimer = null;
+		}
+		tab.images = [];
+		tab.turnCount = 0;
+		tab.turnPos = 0;
+		tab.current = null;
+		tab.light = 'idle';
+		this.closeDir();
+		this.renderPreviews();
+		this.msgContainer.empty();
+		this.renderEmpty();
+		this.setStatusLight('idle');
+	}
+
 	private async startNewSession(): Promise<void> {
-		if (this.busy) {
+		const tab = this.activeTab;
+		if (tab.busy) {
 			new Notice('CodeM 执行中，等本轮结束后再开新会话');
 			return;
 		}
-		// 当前窗口还没开始过对话 → 直接重置，不占窗口额度
-		if (!this.sessionId && this.turnCount === 0 && !this.pendingContext) {
-			this.releaseSession();
-			this.msgContainer.empty();
-			this.resetTurnNav();
-			this.renderEmpty();
-			this.setStatusLight('idle');
+		// 当前 tab 还没开始过对话 → 就地重置，不占 tab 额度
+		if (!tab.sessionId && tab.turnCount === 0 && !tab.pendingContext) {
+			this.resetActiveTab();
 			return;
 		}
-		// 多窗口模式：开新 leaf；到设置上限则停
 		const max = Math.max(1, this.plugin.settings.maxWindows || 3);
-		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_CODEM_CHAT);
-		if (existing.length >= max) {
-			new Notice(`已达窗口上限（${max} 个），可在设置中调整`);
+		if (this.tabs.length >= max) {
+			new Notice(`已达会话上限（${max} 个），可关闭 tab 或在设置中调整`);
 			return;
 		}
-		const leaf = this.app.workspace.getLeaf(true);
-		await leaf.setViewState({ type: VIEW_TYPE_CODEM_CHAT, active: true });
-		this.app.workspace.revealLeaf(leaf);
+		this.closeDir();
+		for (const t of this.tabs) t.scrollEl.style.display = 'none';
+		this.activeTab = this.createTab();
+		this.renderEmpty();
+		this.renderTabs();
+		this.setStatusLight('idle');
+		this.inputEl.focus();
 	}
 
 	/**
 	 * 三色灯：灰=静默 / 黄=执行中 / 绿=执行结束。
-	 * 同步两处：视图内 dot + tab 标题图标（Obsidian 内部 tabHeaderInnerIconEl，社区插件通用做法）
+	 * 同步两处：底部状态行 dot + tab 行（tab 行即状态面板）
 	 */
 	private setStatusLight(state: 'idle' | 'running' | 'done'): void {
+		this.activeTab.light = state;
 		if (this.lightEl) {
 			this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
 			this.lightEl.addClass('is-' + state);
 		}
-		const iconEl = (this.leaf as unknown as { tabHeaderInnerIconEl?: HTMLElement }).tabHeaderInnerIconEl;
-		if (iconEl) {
-			setIcon(iconEl, 'circle');
-			iconEl.style.color =
-				state === 'running' ? 'var(--color-yellow)' : state === 'done' ? 'var(--color-green)' : 'var(--text-faint)';
-		}
+		this.renderTabs();
 	}
 
-	/** 释放当前连接持有的会话（session/close），防 daemon 层 writer 占位堵死后续 load */
-	private releaseSession(): void {
-		const sid = this.sessionId;
-		this.sessionId = null;
+	// ===== 图片粘贴（CodeM 识图） =====
+
+	private renderPreviews(): void {
+		const el = this.previewEl;
+		el.empty();
+		const imgs = this.activeTab.images;
+		if (!imgs.length) {
+			el.hide();
+			return;
+		}
+		el.show();
+		imgs.forEach((img, i) => {
+			const chip = el.createDiv({ cls: 'codem-chat-preview' });
+			chip.createEl('img', { attr: { src: `data:${img.mime};base64,${img.data}` } });
+			const x = chip.createSpan({ cls: 'codem-chat-preview-x', text: '×' });
+			x.onclick = () => {
+				imgs.splice(i, 1);
+				this.renderPreviews();
+			};
+		});
+	}
+
+	private bindPaste(): void {
+		this.inputEl.addEventListener('paste', (e) => {
+			const items = e.clipboardData?.items;
+			if (!items) return;
+			for (const it of Array.from(items)) {
+				if (!it.type.startsWith('image/')) continue;
+				const file = it.getAsFile();
+				if (!file) continue;
+				e.preventDefault();
+				const reader = new FileReader();
+				reader.onload = () => {
+					const m = String(reader.result).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/);
+					if (m) {
+						this.activeTab.images.push({ mime: m[1], data: m[2] });
+						this.renderPreviews();
+					}
+				};
+				reader.readAsDataURL(file);
+			}
+		});
+	}
+
+	/** 释放指定 tab 持有的会话（session/close），防 daemon 层 writer 占位堵死后续 load */
+	private releaseSession(tab?: ChatTab): void {
+		const t = tab ?? this.activeTab;
+		const sid = t.sessionId;
+		t.sessionId = null;
 		if (sid && this.client) {
 			this.client.closeSession(sid).catch(() => {
 				// 已被占用/未知会话等场景忽略
@@ -392,16 +620,22 @@ export class CodeMChatView extends ItemView {
 				extraArgs: this.plugin.settings.extraArgs,
 			},
 			{
-				onUpdate: (u) => this.handleUpdate(u),
+				onUpdate: (sid, u) => this.handleUpdate(sid, u),
 				onPermissionRequest: (params, respond) => this.handlePermission(params, respond),
 				onClose: (code) => {
+					// 连接是全部 tab 共享的，断连复位所有 tab 的执行状态
 					this.client = null;
-					this.sessionId = null;
-					if (this.busy) {
-						new Notice(`CodeM 连接断开（退出码 ${code}），本轮中止`);
-						this.busy = false;
-						this.setStatusLight('idle');
+					for (const t of this.tabs) {
+						t.sessionId = null;
+						if (t.busy) {
+							t.busy = false;
+							t.current = null;
+							t.light = 'idle';
+						}
 					}
+					new Notice(`CodeM 连接断开（退出码 ${code}）`);
+					this.renderTabs();
+					this.setStatusLight(this.activeTab.light);
 				},
 			}
 		);
@@ -412,35 +646,41 @@ export class CodeMChatView extends ItemView {
 
 	private async send(): Promise<void> {
 		const rawPrompt = this.inputEl.value.trim();
-		if (!rawPrompt || this.busy) return;
+		const tab = this.activeTab;
+		if ((!rawPrompt && !tab.images.length) || tab.busy) return;
 
-		this.busy = true;
+		tab.busy = true;
 		this.setStatusLight('running');
 		this.inputEl.value = '';
 		this.closeSuggest();
-		this.msgContainer.querySelector('.codem-chat-empty')?.remove();
+		tab.scrollEl.querySelector('.codem-chat-empty')?.remove();
 
-		const userBlock = this.renderUserMessage(rawPrompt);
+		const userBlock = this.renderUserMessage(rawPrompt, tab.images);
+		tab.images = [];
+		this.renderPreviews();
 		this.addTurnAnchor(userBlock);
 		const st = this.renderAssistantSkeleton();
-		this.current = st;
-		this.mdBuffer = '';
-		this.displayLen = 0;
+		tab.current = st;
+		tab.mdBuffer = '';
+		tab.displayLen = 0;
 
 		try {
 			const client = await this.ensureClient();
-			if (!this.sessionId) this.sessionId = await client.newSession();
+			if (!tab.sessionId) tab.sessionId = await client.newSession();
 			const injected = await this.resolveNoteContexts(rawPrompt);
 			// 软续接：历史快照作为背景随本轮 prompt 附带
-			const finalPrompt = this.pendingContext
-				? `[背景] 以下是此前一次对话的快照（用户/助手交替），请据此理解本次问题：\n${this.pendingContext}\n\n[本次问题]\n${injected}`
+			const finalPrompt = tab.pendingContext
+				? `[背景] 以下是此前一次对话的快照（用户/助手交替），请据此理解本次问题：\n${tab.pendingContext}\n\n[本次问题]\n${injected}`
 				: injected;
-			this.pendingContext = null;
-			this.startTypewriter(st);
-			await client.prompt(this.sessionId, finalPrompt);
-			this.finishTurn(st);
+			tab.pendingContext = null;
+			// content blocks：文本 + 粘贴的图片（CodeM 识图）
+			const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: finalPrompt }];
+			for (const img of tab.images) blocks.push({ type: 'image', data: img.data, mimeType: img.mime });
+			this.startTypewriter(st, tab);
+			await client.prompt(tab.sessionId, blocks);
+			this.finishTurn(st, tab);
 		} catch (e) {
-			this.stopTypewriter();
+			this.stopTypewriter(tab);
 			const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
 			try {
 				const base = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
@@ -452,20 +692,28 @@ export class CodeMChatView extends ItemView {
 				// 日志失败不影响错误提示
 			}
 			st.aiBlock.remove();
-			const errBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-error' });
+			const errBlock = tab.scrollEl.createDiv({ cls: 'codem-chat-msg codem-chat-error' });
 			errBlock.setText(detail);
 		} finally {
-			this.current = null;
-			this.busy = false;
-			this.setStatusLight('done');
-			this.scrollBottom();
+			tab.current = null;
+			tab.busy = false;
+			tab.light = 'done';
+			this.renderTabs();
+			if (this.lightEl) {
+				this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
+				this.lightEl.addClass('is-' + (tab === this.activeTab ? 'done' : tab.light));
+			}
+			this.scrollBottom(tab.scrollEl);
 		}
 	}
 
 	/** 一轮完成收尾：停打字机、渲染全文、折叠思考/工具区 */
-	private finishTurn(st: RenderState): void {
-		this.stopTypewriter();
-		st.textEl.innerHTML = renderMarkdown(this.mdBuffer);
+	private finishTurn(st: RenderState, tab: ChatTab): void {
+		if (tab.typeTimer !== null) {
+			window.clearInterval(tab.typeTimer);
+			tab.typeTimer = null;
+		}
+		st.textEl.innerHTML = renderMarkdown(tab.mdBuffer);
 		if (st.thinkingBody.textContent) {
 			st.thinkingSummary.setText('思考过程');
 			st.thinking.removeAttribute('open');
@@ -480,10 +728,15 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	private renderUserMessage(text: string): HTMLElement {
+	private renderUserMessage(text: string, images: PendingImage[]): HTMLElement {
 		const userBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-user' });
-		const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
-		body.innerHTML = renderMarkdown(text);
+		if (text) {
+			const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
+			body.innerHTML = renderMarkdown(text);
+		}
+		for (const img of images) {
+			userBlock.createEl('img', { cls: 'codem-chat-img', attr: { src: `data:${img.mime};base64,${img.data}` } });
+		}
 		return userBlock;
 	}
 
@@ -555,45 +808,50 @@ export class CodeMChatView extends ItemView {
 
 	// ===== 打字机平滑（CodeM chunk 到达快且成块，逐字追赶输出） =====
 
-	private startTypewriter(st: RenderState): void {
-		this.stopTypewriter();
-		this.typeTimer = window.setInterval(() => {
-			const target = this.mdBuffer.length;
-			if (this.displayLen >= target) return;
-			const step = Math.max(1, Math.ceil((target - this.displayLen) / 15));
-			this.displayLen = Math.min(target, this.displayLen + step);
-			st.textEl.innerHTML = renderMarkdown(this.mdBuffer.slice(0, this.displayLen));
-			this.scrollBottom();
+	private startTypewriter(st: RenderState, tab: ChatTab): void {
+		this.stopTypewriter(tab);
+		tab.typeTimer = window.setInterval(() => {
+			const target = tab.mdBuffer.length;
+			if (tab.displayLen >= target) return;
+			const step = Math.max(1, Math.ceil((target - tab.displayLen) / 15));
+			tab.displayLen = Math.min(target, tab.displayLen + step);
+			st.textEl.innerHTML = renderMarkdown(tab.mdBuffer.slice(0, tab.displayLen));
+			this.scrollBottom(tab.scrollEl);
 		}, TYPE_INTERVAL);
 	}
 
-	private stopTypewriter(): void {
-		if (this.typeTimer !== null) {
-			window.clearInterval(this.typeTimer);
-			this.typeTimer = null;
+	/** 停指定 tab（默认当前 tab）的打字机 */
+	private stopTypewriter(tab?: ChatTab): void {
+		const t = tab ?? this.activeTab;
+		if (t.typeTimer !== null) {
+			window.clearInterval(t.typeTimer);
+			t.typeTimer = null;
 		}
 	}
 
 	// ===== ACP 通知分发 =====
 
-	private handleUpdate(update: Record<string, unknown>): void {
-		const st = this.current;
-		if (!st) return; // 历史载入的重放通知也走这里，current 为空即忽略
+	/** 按 sessionId 路由到对应 tab（多 tab 并行执行的基础） */
+	private handleUpdate(sessionId: string, update: Record<string, unknown>): void {
+		const tab = this.tabs.find((t) => t.sessionId === sessionId);
+		if (!tab) return; // 无归属（如历史载入重放）即忽略
+		const st = tab.current;
+		if (!st) return;
 		const kind = update.sessionUpdate as string;
 		const content = update.content as { text?: string } | undefined;
 
 		if (kind === 'agent_message_chunk') {
-			this.mdBuffer += content?.text ?? '';
+			tab.mdBuffer += content?.text ?? '';
 		} else if (kind === 'agent_thought_chunk') {
 			st.thinkingBody.textContent += content?.text ?? '';
 			st.thinkingBody.scrollTop = st.thinkingBody.scrollHeight;
-			this.scrollBottom();
+			this.scrollBottom(tab.scrollEl);
 		} else if (kind === 'tool_call' || kind === 'tool_call_update') {
-			this.handleToolEvent(st, update);
+			this.handleToolEvent(st, update, tab.scrollEl);
 		}
 	}
 
-	private handleToolEvent(st: RenderState, update: Record<string, unknown>): void {
+	private handleToolEvent(st: RenderState, update: Record<string, unknown>, scrollEl?: HTMLElement): void {
 		const id = update.toolCallId as string;
 		const status = (update.status as string) || '';
 		let card = st.cards.get(id);
@@ -629,14 +887,16 @@ export class CodeMChatView extends ItemView {
 				);
 			}
 		}
-		this.scrollBottom();
+		this.scrollBottom(scrollEl);
 	}
 
 	private handlePermission(
 		params: Record<string, unknown>,
 		respond: (result: unknown) => void
 	): void {
-		const st = this.current;
+		// 按 sessionId 路由到发起 tab；协议未带时退回当前 tab
+		const tab = this.tabs.find((t) => t.sessionId === params.sessionId) ?? this.activeTab;
+		const st = tab.current;
 		const tool = params.toolCall as { title?: string } | undefined;
 		const label = tool?.title ?? '工具请求权限';
 		const options = (params.options as Array<{ optionId: string; name: string; kind?: string }>) ?? [];
@@ -650,7 +910,7 @@ export class CodeMChatView extends ItemView {
 			respond({ outcome: { outcome: 'selected', optionId: allow.optionId } });
 			const note = st.aiBlock.createDiv({ cls: 'codem-chat-perm codem-chat-perm-auto' });
 			note.setText(`🤖 yolo 自动批准：${label}`);
-			this.scrollBottom();
+			this.scrollBottom(tab.scrollEl);
 			return;
 		}
 		const bar = st.aiBlock.createDiv({ cls: 'codem-chat-perm' });
@@ -661,7 +921,7 @@ export class CodeMChatView extends ItemView {
 				respond({ outcome: { outcome: 'selected', optionId: opt.optionId } });
 			};
 		}
-		this.scrollBottom();
+		this.scrollBottom(tab.scrollEl);
 	}
 
 	// ===== 内联候选（/ 技能、@ 文件/文件夹） =====
@@ -964,7 +1224,7 @@ export class CodeMChatView extends ItemView {
 
 	private renderHistoryTurn(t: Turn): void {
 		if (t.role === 'user') {
-			const userBlock = this.renderUserMessage(t.blocks.map((b) => b.content).join('\n\n'));
+			const userBlock = this.renderUserMessage(t.blocks.map((b) => b.content).join('\n\n'), []);
 			this.addTurnAnchor(userBlock);
 		} else if (t.role === 'assistant') {
 			const aiBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
@@ -998,8 +1258,9 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	private scrollBottom(): void {
-		this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
+	private scrollBottom(el?: HTMLElement): void {
+		const t = el ?? this.msgContainer;
+		t.scrollTop = t.scrollHeight;
 	}
 
 	/** 递归收集文件夹下全部 md（Obsidian typings 的 TFolder 无 getAllFiles） */

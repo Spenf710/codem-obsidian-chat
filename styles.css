@@ -467,3 +467,85 @@
 	border-bottom: 1px solid var(--background-modifier-border);
 	background: var(--background-secondary);
 }
+
+/* 消息区可划词选中（复制/翻译），覆盖宿主主题可能的禁选 */
+.codem-chat-messages,
+.codem-chat-messages * {
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+/* 会话 tab 行（输入框上方，参考 Claudian 数字 tab） */
+.codem-chat-tabs {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-wrap: wrap;
+	margin-bottom: 6px;
+}
+.codem-chat-tabs:empty {
+	display: none;
+}
+.codem-chat-tab {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 2px 8px;
+	font-size: var(--font-ui-small);
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	cursor: pointer;
+}
+.codem-chat-tab.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+.codem-chat-tab-close {
+	font-size: 1.1em;
+	line-height: 1;
+	opacity: 0.5;
+	padding: 0 1px;
+}
+.codem-chat-tab-close:hover {
+	opacity: 1;
+}
+
+/* 粘贴图片预览 chips */
+.codem-chat-previews {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-bottom: 6px;
+}
+.codem-chat-preview {
+	position: relative;
+	width: 52px;
+	height: 52px;
+	border-radius: 6px;
+	overflow: hidden;
+	border: 1px solid var(--background-modifier-border);
+}
+.codem-chat-preview img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+}
+.codem-chat-preview-x {
+	position: absolute;
+	top: 0;
+	right: 2px;
+	cursor: pointer;
+	font-size: 1.1em;
+	text-shadow: 0 0 3px var(--background-primary);
+}
+/* 用户消息里附带的图片 */
+.codem-chat-img {
+	max-width: 200px;
+	max-height: 160px;
+	border-radius: 8px;
+	margin-top: 6px;
+	display: block;
+}
