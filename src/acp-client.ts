@@ -209,6 +209,15 @@ export class AcpClient {
 		return r.stopReason;
 	}
 
+	/**
+	 * 载入历史会话（loadSession capability 实测可用）。resolve 后原 sessionId 即可续接 prompt。
+	 * 载入期间 agent 会重放历史消息（user_message_chunk / agent_message_chunk 通知），调用方需忽略。
+	 */
+	async loadSession(sessionId: string): Promise<void> {
+		await this.ensureStarted();
+		await this.request('session/load', { sessionId, cwd: this.opts.cwd, mcpServers: [] });
+	}
+
 	stop(): void {
 		this.child?.kill();
 		this.child = null;
