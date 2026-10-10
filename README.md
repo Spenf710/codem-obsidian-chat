@@ -1,8 +1,8 @@
 # CodeM Chat · Obsidian Sidebar Chat for CodeM
 
-Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat, in a Claude Code–like experience. Your vault becomes the agent's working directory.
+Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat. Your vault becomes the agent's working directory.
 
-将 CodeM（飞书 AI 研发智能体）嵌入 Obsidian 侧边栏，获得类 Claude Code 的对话体验：流式回复、思考过程、工具调用、会话回溯，全部在笔记库里完成。
+将 CodeM（飞书 AI 研发智能体）嵌入 Obsidian 侧边栏，获得流畅的 AI 结对对话体验：流式回复、思考过程、工具调用、会话回溯，全部在笔记库里完成。
 
 ![screenshot placeholder]
 
@@ -12,7 +12,7 @@ Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat, in a Claud
 - **多会话 Tab**：单视图内多个会话并行执行，每个 Tab 三色灯指示状态（灰=静默 / 黄=执行中 / 绿=完成）
 - **会话历史追溯**：扫描 CodeM 本地会话（`~/.codem/sessions`），一键载入回显并原生续接；跨端占用时自动降级为快照续聊
 - **AI 会话标题**：首轮对话结束后自动生成中文标题
-- **`/` 技能**：列出 CodeM / Claude 技能，支持中文描述检索
+- **`/` 技能**：列出 CodeM 及本地技能，支持中文描述检索
 - **`@` 引用**：全局检索或目录钻取，`[[笔记]]` 与 `[[文件夹]]` 内容自动注入上下文
 - **图片粘贴**：剪贴板截图直接粘贴发送（base64 内嵌，CodeM 端识图）
 - **YOLO 模式**：一键切换工具权限自动批准
@@ -48,6 +48,10 @@ Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat, in a Claud
 npm install
 npm run build   # 类型检查 + esbuild 产物输出 main.js
 ```
+
+## Acknowledgements / 致谢
+
+交互设计参考了 Claudian（Obsidian 社区插件）的设计思路：侧边栏聊天布局、多会话 Tab、权限确认交互。特此致谢。
 
 ## License
 
