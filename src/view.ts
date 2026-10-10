@@ -1,4 +1,4 @@
-import { ItemView, Notice, WorkspaceLeaf } from 'obsidian';
+import { ItemView, Notice, WorkspaceLeaf, setIcon, TFile, TFolder } from 'obsidian';
 import * as fs from 'fs';
 import * as path from 'path';
 import type CodeMChatPlugin from './main';
@@ -9,14 +9,17 @@ import {
 	readCodemSessionTurns,
 	listCodemSkills,
 	type SessionCard,
+	type SkillInfo,
 	type Turn,
 } from './codem-sessions';
-import { SkillPickerModal, FilePickerModal, SessionPickerModal } from './pickers';
+import { SessionPickerModal } from './pickers';
 
 export const VIEW_TYPE_CODEM_CHAT = 'codem-chat-view';
 
 const TYPE_INTERVAL = 30;
 const TOOL_RESULT_MAX_LEN = 2000;
+const FOLDER_INJECT_MAX = 12000;
+const SUGGEST_MAX = 8;
 
 interface ToolCard {
 	itemEl: HTMLElement;
@@ -37,18 +40,25 @@ interface RenderState {
 	cards: Map<string, ToolCard>;
 }
 
+/** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
+interface SuggestItem {
+	label: string;
+	desc: string;
+	insert: string;
+}
+
 function statusMark(s: string): string {
 	return s === 'completed' ? '✅' : s === 'failed' ? '❌' : s === 'in_progress' ? '⏳' : '';
 }
 
-/** 右侧边栏聊天视图（ACP 架构）：流式/思考/工具/权限确认/技能/文件引用/历史续接 */
+/** 右侧边栏聊天视图（ACP 架构）：流式/思考/工具/权限确认/内联候选/轮次导航/历史续接 */
 export class CodeMChatView extends ItemView {
 	plugin: CodeMChatPlugin;
 	private client: AcpClient | null = null;
 	private sessionId: string | null = null;
 	private msgContainer!: HTMLElement;
+	private navContainer!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
-	private sendBtn!: HTMLButtonElement;
 	private yoloBtn!: HTMLButtonElement;
 	private busy = false;
 	private yolo = false;
@@ -56,6 +66,18 @@ export class CodeMChatView extends ItemView {
 	private displayLen = 0;
 	private typeTimer: number | null = null;
 	private current: RenderState | null = null;
+
+	// 轮次导航
+	private turnCount = 0;
+
+	// 内联候选（/ 技能、@ 文件/文件夹）
+	private suggestEl: HTMLElement | null = null;
+	private suggestItems: SuggestItem[] = [];
+	private suggestIndex = 0;
+	private suggestPrefix: '/' | '@' | null = null;
+	private suggestStart = 0;
+	private skillsCache: SkillInfo[] | null = null;
+	private vaultEntries: SuggestItem[] | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: CodeMChatPlugin) {
 		super(leaf);
@@ -79,43 +101,78 @@ export class CodeMChatView extends ItemView {
 		root.empty();
 		root.addClass('codem-chat-root');
 
-		const topBar = root.createDiv({ cls: 'codem-chat-topbar' });
-		const newBtn = topBar.createEl('button', { text: '新会话' });
-		newBtn.onclick = () => this.startNewSession();
-		const histBtn = topBar.createEl('button', { text: '历史' });
-		histBtn.onclick = () => void this.openSessionPicker();
-		this.yoloBtn = topBar.createEl('button', { text: '🤖 yolo', cls: 'codem-chat-yolo' });
-		this.yoloBtn.setAttribute('aria-label', 'yolo 模式：自动批准工具权限请求');
-		this.yoloBtn.onclick = () => this.toggleYolo();
-
 		this.msgContainer = root.createDiv({ cls: 'codem-chat-messages' });
 		this.renderEmpty();
 
-		const inputBar = root.createDiv({ cls: 'codem-chat-inputbar' });
-		this.inputEl = inputBar.createEl('textarea', {
+		// 导航行（轮次数字居左，会话按钮居右）——参考 Claudian 输入区布局
+		const navRow = root.createDiv({ cls: 'codem-chat-navrow' });
+		this.navContainer = navRow.createDiv({ cls: 'codem-chat-nav' });
+		const actions = navRow.createDiv({ cls: 'codem-chat-actions' });
+		const newBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
+		newBtn.setAttribute('aria-label', '新会话');
+		setIcon(newBtn, 'plus');
+		newBtn.onclick = () => this.startNewSession();
+		const histBtn = actions.createEl('button', { cls: 'codem-chat-iconbtn' });
+		histBtn.setAttribute('aria-label', '历史会话');
+		setIcon(histBtn, 'history');
+		histBtn.onclick = () => void this.openSessionPicker();
+
+		// 输入容器（圆角边框内：textarea + 底部状态行）
+		const inputWrap = root.createDiv({ cls: 'codem-chat-inputwrap' });
+		this.suggestEl = inputWrap.createDiv({ cls: 'codem-suggest' });
+		this.suggestEl.hide();
+		this.inputEl = inputWrap.createEl('textarea', {
 			cls: 'codem-chat-input',
-			attr: { placeholder: '向 CodeM 提问…（Enter 发送 / Shift+Enter 换行 / / 技能 / @ 文件）', rows: 3 },
+			attr: { placeholder: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）', rows: 3 },
 		});
+		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
+		bottomRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM · ACP' });
+		this.yoloBtn = bottomRow.createEl('button', { text: '🤖 YOLO', cls: 'codem-chat-yolo' });
+		this.yoloBtn.setAttribute('aria-label', 'yolo 模式：自动批准工具权限请求');
+		this.yoloBtn.onclick = () => this.toggleYolo();
+
+		this.bindInputEvents();
+	}
+
+	private bindInputEvents(): void {
 		this.inputEl.addEventListener('keydown', (e) => {
+			// 内联候选开启时优先响应
+			if (this.suggestPrefix !== null && this.suggestItems.length > 0) {
+				if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					this.suggestIndex = (this.suggestIndex + 1) % this.suggestItems.length;
+					this.renderSuggestList(this.suggestItems);
+					return;
+				}
+				if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					this.suggestIndex = (this.suggestIndex - 1 + this.suggestItems.length) % this.suggestItems.length;
+					this.renderSuggestList(this.suggestItems);
+					return;
+				}
+				if (e.key === 'Enter' || e.key === 'Tab') {
+					e.preventDefault();
+					this.applySuggest();
+					return;
+				}
+				if (e.key === 'Escape') {
+					e.preventDefault();
+					this.closeSuggest();
+					return;
+				}
+			}
 			if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
 				e.preventDefault();
 				void this.send();
-				return;
-			}
-			if ((e.key === '/' || e.key === '@') && !e.isComposing && !e.ctrlKey && !e.altKey && !e.metaKey) {
-				const el = this.inputEl;
-				const pos = el.selectionStart ?? 0;
-				const before = el.value.slice(0, pos);
-				// 词首触发（行首/空格/换行之后）
-				if (before === '' || before.endsWith('\n') || before.endsWith(' ')) {
-					e.preventDefault();
-					if (e.key === '/') void this.openSkillPicker();
-					else this.openFilePicker();
-				}
 			}
 		});
-		this.sendBtn = inputBar.createEl('button', { text: '发送', cls: 'codem-chat-send' });
-		this.sendBtn.onclick = () => void this.send();
+		this.inputEl.addEventListener('input', (e) => {
+			if ((e as InputEvent).isComposing) return;
+			this.updateSuggest();
+		});
+		this.inputEl.addEventListener('blur', () => {
+			window.setTimeout(() => this.closeSuggest(), 120);
+		});
 	}
 
 	async onClose(): Promise<void> {
@@ -131,6 +188,11 @@ export class CodeMChatView extends ItemView {
 		});
 	}
 
+	private resetTurnNav(): void {
+		this.turnCount = 0;
+		this.navContainer.empty();
+	}
+
 	private startNewSession(): void {
 		if (this.busy) {
 			new Notice('CodeM 执行中，等本轮结束后再开新会话');
@@ -138,6 +200,7 @@ export class CodeMChatView extends ItemView {
 		}
 		this.sessionId = null;
 		this.msgContainer.empty();
+		this.resetTurnNav();
 		this.renderEmpty();
 	}
 
@@ -165,7 +228,6 @@ export class CodeMChatView extends ItemView {
 					if (this.busy) {
 						new Notice(`CodeM 连接断开（退出码 ${code}），本轮中止`);
 						this.busy = false;
-						this.sendBtn.disabled = false;
 					}
 				},
 			}
@@ -181,10 +243,11 @@ export class CodeMChatView extends ItemView {
 
 		this.busy = true;
 		this.inputEl.value = '';
-		this.sendBtn.disabled = true;
+		this.closeSuggest();
 		this.msgContainer.querySelector('.codem-chat-empty')?.remove();
 
-		this.renderUserMessage(rawPrompt);
+		const userBlock = this.renderUserMessage(rawPrompt);
+		this.addTurnAnchor(userBlock);
 		const st = this.renderAssistantSkeleton();
 		this.current = st;
 		this.mdBuffer = '';
@@ -215,7 +278,6 @@ export class CodeMChatView extends ItemView {
 		} finally {
 			this.current = null;
 			this.busy = false;
-			this.sendBtn.disabled = false;
 			this.scrollBottom();
 		}
 	}
@@ -238,12 +300,26 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	private renderUserMessage(text: string): void {
+	private renderUserMessage(text: string): HTMLElement {
 		const userBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-user' });
-		const label = userBlock.createDiv({ cls: 'codem-chat-role', text: '你' });
-		void label;
 		const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
 		body.innerHTML = renderMarkdown(text);
+		return userBlock;
+	}
+
+	/** 轮次导航锚点：输入区上方数字按钮，点击滚动定位到对应用户消息 */
+	private addTurnAnchor(userBlock: HTMLElement): void {
+		this.turnCount++;
+		const n = this.turnCount;
+		userBlock.setAttribute('data-codem-turn', String(n));
+		const btn = this.navContainer.createEl('button', { text: String(n), cls: 'codem-chat-nav-btn' });
+		btn.onclick = () => {
+			const target = this.msgContainer.querySelector(`[data-codem-turn="${n}"]`);
+			if (!target) return;
+			(target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+			target.addClass('codem-chat-flash');
+			window.setTimeout(() => target.removeClass('codem-chat-flash'), 1200);
+		};
 	}
 
 	private renderAssistantSkeleton(): RenderState {
@@ -260,23 +336,47 @@ export class CodeMChatView extends ItemView {
 		return { aiBlock, thinking, thinkingSummary, thinkingBody, toolsEl, toolsSummary, textEl, cards: new Map() };
 	}
 
-	/** [[笔记]] 引用 → 注入笔记全文（发送给 CodeM，UI 显示原文） */
+	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
 	private async resolveNoteContexts(prompt: string): Promise<string> {
 		const refs = [...prompt.matchAll(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g)];
 		if (!refs.length) return prompt;
 		const extras: string[] = [];
 		for (const m of refs) {
-			const dest = this.app.metadataCache.getFirstLinkpathDest(m[1].trim(), '');
+			const ref = m[1].trim();
+			const dest = this.app.metadataCache.getFirstLinkpathDest(ref, '');
 			if (dest) {
 				let content = await this.app.vault.cachedRead(dest);
 				if (content.length > 8000) content = content.slice(0, 8000) + '\n…（已截断）';
 				extras.push(`=== 笔记: ${dest.path} ===\n${content}`);
-			} else {
-				new Notice(`未找到笔记：${m[1]}`);
+				continue;
 			}
+			// 文件夹引用：注入文件清单 + md 全文（总量截断）
+			const af = this.app.vault.getAbstractFileByPath(ref);
+			if (af instanceof TFolder) {
+				extras.push(await this.buildFolderContext(af));
+				continue;
+			}
+			new Notice(`未找到笔记或文件夹：${ref}`);
 		}
 		if (!extras.length) return prompt;
-		return `${prompt}\n\n---\n📎 附加笔记内容：\n${extras.join('\n\n')}`;
+		return `${prompt}\n\n---\n📎 附加知识库内容：\n${extras.join('\n\n')}`;
+	}
+
+	private async buildFolderContext(folder: TFolder): Promise<string> {
+		const mds = CodeMChatView.collectMd(folder).slice(0, 50);
+		const parts: string[] = [`=== 文件夹: ${folder.path}（${mds.length} 个 md）===`];
+		let total = 0;
+		for (const f of mds) {
+			if (total >= FOLDER_INJECT_MAX) {
+				parts.push('…（其余文件未注入，已达上限）');
+				break;
+			}
+			let c = await this.app.vault.cachedRead(f);
+			if (total + c.length > FOLDER_INJECT_MAX) c = c.slice(0, Math.max(0, FOLDER_INJECT_MAX - total)) + '\n…（截断）';
+			parts.push(`--- ${f.path} ---\n${c}`);
+			total += c.length;
+		}
+		return parts.join('\n\n');
 	}
 
 	// ===== 打字机平滑（CodeM chunk 到达快且成块，逐字追赶输出） =====
@@ -286,7 +386,6 @@ export class CodeMChatView extends ItemView {
 		this.typeTimer = window.setInterval(() => {
 			const target = this.mdBuffer.length;
 			if (this.displayLen >= target) return;
-			// 自适应速度：积压越多追越快，保证长回复不拖沓
 			const step = Math.max(1, Math.ceil((target - this.displayLen) / 15));
 			this.displayLen = Math.min(target, this.displayLen + step);
 			st.textEl.innerHTML = renderMarkdown(this.mdBuffer.slice(0, this.displayLen));
@@ -313,14 +412,14 @@ export class CodeMChatView extends ItemView {
 			this.mdBuffer += content?.text ?? '';
 		} else if (kind === 'agent_thought_chunk') {
 			st.thinkingBody.textContent += content?.text ?? '';
-			st.thinkingBody.scrollTop = st.thinkingBody.scrollHeight; // 内部视口跟随
+			st.thinkingBody.scrollTop = st.thinkingBody.scrollHeight;
 			this.scrollBottom();
 		} else if (kind === 'tool_call' || kind === 'tool_call_update') {
-			this.handleToolEvent(st, update, kind);
+			this.handleToolEvent(st, update);
 		}
 	}
 
-	private handleToolEvent(st: RenderState, update: Record<string, unknown>, kind: string): void {
+	private handleToolEvent(st: RenderState, update: Record<string, unknown>): void {
 		const id = update.toolCallId as string;
 		const status = (update.status as string) || '';
 		let card = st.cards.get(id);
@@ -331,16 +430,13 @@ export class CodeMChatView extends ItemView {
 			headEl.setText(`${title} ${statusMark(status)}`.trimEnd());
 			const rawInput = update.rawInput;
 			if (rawInput && Object.keys(rawInput as object).length > 0) {
-				itemEl.createDiv({ cls: 'codem-chat-tool-raw' }).setText(
-					JSON.stringify(rawInput).slice(0, 300)
-				);
+				itemEl.createDiv({ cls: 'codem-chat-tool-raw' }).setText(JSON.stringify(rawInput).slice(0, 300));
 			}
 			card = { itemEl, headEl, title, status };
 			st.cards.set(id, card);
 			st.toolsEl.show();
 			st.toolsSummary.setText(`🔧 工具调用 ${st.cards.size} 项（执行中…）`);
 		} else {
-			// title 仅在事件显式携带时更新（tool_call_update 常不带 title，不能让 fallback 值覆盖真实标题）
 			const incomingTitle = update.title as string | undefined;
 			if (incomingTitle) card.title = incomingTitle;
 			if (status && status !== card.status) {
@@ -348,7 +444,6 @@ export class CodeMChatView extends ItemView {
 				card.headEl.setText(`${card.title} ${statusMark(status)}`.trimEnd());
 			}
 		}
-		// 结果内容：CodeM 实测为双层嵌套 content[].content.text，兼容单层
 		const contents = (update.content as Array<{ text?: string; content?: { text?: string } }>) ?? [];
 		for (const c of contents) {
 			const text = c?.content?.text ?? c?.text;
@@ -377,7 +472,6 @@ export class CodeMChatView extends ItemView {
 			respond({ outcome: { outcome: 'cancelled' } });
 			return;
 		}
-		// yolo 模式：自动批准（选第一个 allow 类选项）
 		if (this.yolo && allow) {
 			respond({ outcome: { outcome: 'selected', optionId: allow.optionId } });
 			const note = st.aiBlock.createDiv({ cls: 'codem-chat-perm codem-chat-perm-auto' });
@@ -396,27 +490,108 @@ export class CodeMChatView extends ItemView {
 		this.scrollBottom();
 	}
 
-	// ===== / 技能与 @ 文件 =====
+	// ===== 内联候选（/ 技能、@ 文件/文件夹） =====
 
-	private async openSkillPicker(): Promise<void> {
-		const skills = await listCodemSkills();
-		if (!skills.length) {
-			new Notice('未扫描到技能（~/.claude/skills、~/.codem/skills、managed 均为空）');
+	/** 扫描光标前的 token，命中 / 或 @ 词首则展示候选 */
+	private updateSuggest(): void {
+		const el = this.inputEl;
+		const pos = el.selectionStart ?? 0;
+		const before = el.value.slice(0, pos);
+		const m = before.match(/(^|\s)([\/@])([^\s]*)$/);
+		if (!m) {
+			this.closeSuggest();
 			return;
 		}
-		new SkillPickerModal(this.app, skills, (s) => this.insertAtCursor(`/${s.name} `)).open();
+		const prefix = m[2] as '/' | '@';
+		const query = m[3];
+		this.suggestPrefix = prefix;
+		this.suggestIndex = 0;
+		this.suggestStart = pos - query.length - 1;
+		if (prefix === '/') {
+			void this.updateSkillSuggestions(query);
+		} else {
+			this.updateVaultSuggestions(query);
+		}
 	}
 
-	private openFilePicker(): void {
-		new FilePickerModal(this.app, (f) => this.insertAtCursor(`[[${f.path}]]`)).open();
+	private async updateSkillSuggestions(query: string): Promise<void> {
+		if (!this.skillsCache) {
+			this.skillsCache = await listCodemSkills();
+		}
+		// 异步加载期间输入可能已变化
+		if (this.suggestPrefix !== '/') return;
+		const q = query.toLowerCase();
+		const items: SuggestItem[] = this.skillsCache
+			.filter((s) => s.name.toLowerCase().includes(q))
+			.slice(0, SUGGEST_MAX)
+			.map((s) => ({ label: `/${s.name}`, desc: s.description, insert: `/${s.name} ` }));
+		this.renderSuggestList(items);
 	}
 
-	private insertAtCursor(text: string): void {
+	private updateVaultSuggestions(query: string): void {
+		if (!this.vaultEntries) {
+			this.vaultEntries = [];
+			for (const af of this.app.vault.getAllLoadedFiles()) {
+				if (af.path.startsWith('.obsidian')) continue;
+				if (af instanceof TFolder) {
+					if (af.path) this.vaultEntries.push({ label: `📁 ${af.path}`, desc: '文件夹', insert: `[[${af.path}]] ` });
+				}
+			}
+			for (const f of this.app.vault.getFiles()) {
+				if (f.path.startsWith('.obsidian')) continue;
+				this.vaultEntries.push({ label: f.path, desc: '', insert: `[[${f.path}]] ` });
+			}
+			// 文件夹优先，同组按路径排序
+			this.vaultEntries.sort((a, b) => {
+				const fa = a.desc === '文件夹' ? 0 : 1;
+				const fb = b.desc === '文件夹' ? 0 : 1;
+				return fa !== fb ? fa - fb : a.label.localeCompare(b.label);
+			});
+		}
+		const q = query.toLowerCase();
+		const items = this.vaultEntries.filter((it) => it.label.toLowerCase().includes(q)).slice(0, SUGGEST_MAX);
+		this.renderSuggestList(items);
+	}
+
+	private renderSuggestList(items: SuggestItem[]): void {
+		if (!this.suggestEl) return;
+		if (!items.length) {
+			this.closeSuggest();
+			return;
+		}
+		this.suggestItems = items;
+		this.suggestIndex = Math.min(this.suggestIndex, items.length - 1);
+		this.suggestEl.empty();
+		items.forEach((it, i) => {
+			const row = this.suggestEl!.createDiv({ cls: 'codem-suggest-item' + (i === this.suggestIndex ? ' is-active' : '') });
+			row.createSpan({ cls: 'codem-suggest-label', text: it.label });
+			if (it.desc) row.createSpan({ cls: 'codem-suggest-desc', text: it.desc });
+			row.addEventListener('mousedown', (e) => e.preventDefault()); // 防止抢走输入框焦点
+			row.addEventListener('click', () => {
+				this.suggestIndex = i;
+				this.applySuggest();
+			});
+		});
+		this.suggestEl.show();
+	}
+
+	private applySuggest(): void {
+		const item = this.suggestItems[this.suggestIndex];
+		if (!item) {
+			this.closeSuggest();
+			return;
+		}
 		const el = this.inputEl;
-		const start = el.selectionStart ?? el.value.length;
-		const end = el.selectionEnd ?? start;
-		el.setRangeText(text, start, end, 'end');
+		const pos = el.selectionStart ?? 0;
+		el.setRangeText(item.insert, this.suggestStart, pos, 'end');
+		this.closeSuggest();
 		el.focus();
+	}
+
+	private closeSuggest(): void {
+		this.suggestPrefix = null;
+		this.suggestItems = [];
+		if (this.suggestEl) this.suggestEl.hide();
 	}
 
 	// ===== 历史会话追溯 =====
@@ -438,9 +613,9 @@ export class CodeMChatView extends ItemView {
 	/** 载入历史会话：jsonl 回显 + ACP session/load 续接 */
 	private async loadHistory(card: SessionCard): Promise<void> {
 		this.busy = true;
-		this.sendBtn.disabled = true;
 		this.msgContainer.empty();
-		const statusEl = this.msgContainer.createDiv({ cls: 'codem-chat-empty', text: '载入历史会话…' });
+		this.resetTurnNav();
+		this.msgContainer.createDiv({ cls: 'codem-chat-empty', text: '载入历史会话…' });
 		try {
 			const turns = await readCodemSessionTurns(card.filePath);
 			const client = await this.ensureClient();
@@ -448,7 +623,6 @@ export class CodeMChatView extends ItemView {
 				await client.loadSession(card.sessionId);
 				this.sessionId = card.sessionId;
 			} catch {
-				// load 失败（如会话属其他入口）：仅回显，发送时自动开新会话
 				this.sessionId = null;
 				new Notice('该会话无法续接（可能为飞书/旧入口会话），仅回显');
 			}
@@ -461,16 +635,13 @@ export class CodeMChatView extends ItemView {
 			this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
 		} finally {
 			this.busy = false;
-			this.sendBtn.disabled = false;
-			void statusEl;
 		}
 	}
 
 	private renderHistoryTurn(t: Turn): void {
 		if (t.role === 'user') {
-			const userBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-user' });
-			const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
-			body.innerHTML = renderMarkdown(t.blocks.map((b) => b.content).join('\n\n'));
+			const userBlock = this.renderUserMessage(t.blocks.map((b) => b.content).join('\n\n'));
+			this.addTurnAnchor(userBlock);
 		} else if (t.role === 'assistant') {
 			const aiBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
 			const thinks = t.blocks.filter((b) => b.kind === 'thinking');
@@ -505,5 +676,15 @@ export class CodeMChatView extends ItemView {
 
 	private scrollBottom(): void {
 		this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
+	}
+
+	/** 递归收集文件夹下全部 md（Obsidian typings 的 TFolder 无 getAllFiles） */
+	private static collectMd(folder: TFolder): TFile[] {
+		const out: TFile[] = [];
+		for (const child of folder.children) {
+			if (child instanceof TFile && child.extension === 'md') out.push(child);
+			else if (child instanceof TFolder) out.push(...CodeMChatView.collectMd(child));
+		}
+		return out;
 	}
 }
