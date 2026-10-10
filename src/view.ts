@@ -1005,10 +1005,31 @@ export class CodeMChatView extends ItemView {
 	}
 
 	/**
-	 * @ 候选：目录钻取式。token '@a/b/过滤词' 按路径段逐级下钻到当前目录，
-	 * 列出该目录下的子文件夹（→ 下钻）与文件；回车选中插入引用。
+	 * @ 候选，两种模式：
+	 * - '@关键字'（无 /）：全局检索文件与文件夹（跨目录），文件夹仍可 → 钻取
+	 * - '@a/b/过滤词'（含 /）：按路径段逐级下钻到当前目录，列出子文件夹与文件
 	 */
 	private updateVaultSuggestions(query: string): void {
+		if (!query.includes('/')) {
+			this.suggestDirPath = '';
+			const q = query.toLowerCase();
+			const folders: SuggestItem[] = [];
+			for (const af of this.app.vault.getAllLoadedFiles()) {
+				if (!af.path || af.path.startsWith('.obsidian')) continue;
+				if (af instanceof TFolder && af.path.toLowerCase().includes(q)) {
+					folders.push({ label: `📁 ${af.path}`, desc: '', insert: `[[${af.path}]] `, vaultPath: af.path, isFolder: true });
+				}
+			}
+			const files = this.app.vault
+				.getFiles()
+				.filter((f) => !f.path.startsWith('.obsidian') && f.path.toLowerCase().includes(q))
+				.sort((a, b) => a.path.localeCompare(b.path))
+				.map((f) => ({ label: f.path, desc: f.extension, insert: `[[${f.path}]] ` }));
+			const items = [...folders.sort((a, b) => a.label.localeCompare(b.label)), ...files].slice(0, SUGGEST_MAX);
+			if (!items.length) items.push({ label: '（无匹配）', desc: '', insert: '' });
+			this.renderSuggestList(items);
+			return;
+		}
 		const segs = query.split('/');
 		const filter = (segs.pop() ?? '').toLowerCase();
 		let dir: TFolder = this.app.vault.getRoot();
@@ -1068,9 +1089,12 @@ export class CodeMChatView extends ItemView {
 		this.suggestItems = items;
 		this.suggestIndex = Math.min(this.suggestIndex, items.length - 1);
 		this.suggestEl.empty();
-		// @ 钻取：顶部显示当前目录面包屑（不占候选索引）
+		// @ 模式：顶部显示当前目录面包屑（不占候选索引）；全局检索模式显示提示
 		if (this.suggestPrefix === '@') {
-			this.suggestEl.createDiv({ cls: 'codem-suggest-head', text: `📁 ${this.suggestDirPath || 'Vault 根'}` });
+			const headText = this.suggestDirPath
+				? `📁 ${this.suggestDirPath}`
+				: '🔍 全局检索 · 输入 / 进入目录钻取';
+			this.suggestEl.createDiv({ cls: 'codem-suggest-head', text: headText });
 		}
 		items.forEach((it, i) => {
 			const row = this.suggestEl!.createDiv({ cls: 'codem-suggest-item' + (i === this.suggestIndex ? ' is-active' : '') });
