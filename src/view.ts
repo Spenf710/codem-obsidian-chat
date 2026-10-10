@@ -2,7 +2,7 @@ import { ItemView, Notice, WorkspaceLeaf, setIcon, TFile, TFolder } from 'obsidi
 import * as fs from 'fs';
 import * as path from 'path';
 import type CodeMChatPlugin from './main';
-import { AcpClient } from './acp-client';
+import { AcpClient, runCodemHeadless, type AcpOptions } from './acp-client';
 import { renderMarkdown } from './markdown';
 import {
 	listCodemSessions,
@@ -614,15 +614,19 @@ export class CodeMChatView extends ItemView {
 		new Notice(this.yolo ? 'yolo 已开启：工具权限自动批准' : 'yolo 已关闭：工具权限逐次确认');
 	}
 
+	private pluginOpts(): AcpOptions {
+		return {
+			cliPath: this.plugin.settings.codemCliPath,
+			cwd: (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath(),
+			nodePath: this.plugin.settings.nodePath,
+			extraArgs: this.plugin.settings.extraArgs,
+		};
+	}
+
 	private async ensureClient(): Promise<AcpClient> {
 		if (this.client) return this.client;
 		this.client = new AcpClient(
-			{
-				cliPath: this.plugin.settings.codemCliPath,
-				cwd: (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath(),
-				nodePath: this.plugin.settings.nodePath,
-				extraArgs: this.plugin.settings.extraArgs,
-			},
+			this.pluginOpts(),
 			{
 				onUpdate: (sid, u) => this.handleUpdate(sid, u),
 				onPermissionRequest: (params, respond) => this.handlePermission(params, respond),
@@ -683,6 +687,10 @@ export class CodeMChatView extends ItemView {
 			this.startTypewriter(st, tab);
 			await client.prompt(tab.sessionId, blocks);
 			this.finishTurn(st, tab);
+			// 首轮结束后台生成会话标题（无头 -p 调用，静默失败）
+			if (tab.turnCount === 1 && tab.sessionId && !this.plugin.settings.sessionTitles[tab.sessionId]) {
+				void this.generateTitle(tab, rawPrompt);
+			}
 		} catch (e) {
 			this.stopTypewriter(tab);
 			const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
@@ -729,6 +737,34 @@ export class CodeMChatView extends ItemView {
 			st.toolsEl.removeAttribute('open');
 		} else {
 			st.toolsEl.hide();
+		}
+	}
+
+	/**
+	 * AI 生成会话标题：无头 `codem -p` 一次性调用（不走 ACP 长连接），
+	 * 依据首轮用户问题 + 助手回复摘要；结果持久化到 settings.sessionTitles。
+	 */
+	private async generateTitle(tab: ChatTab, userText: string): Promise<void> {
+		try {
+			const reply = tab.mdBuffer.replace(/\s+/g, ' ').slice(0, 600);
+			const ask = userText.replace(/\s+/g, ' ').replace(/["'`]/g, ' ').slice(0, 200);
+			// cmd /c 参数不能带换行，整体单行化
+			const prompt =
+				`[标题生成]请为以下对话生成一个不超过12字的中文标题，直接输出标题本身，不要引号、句号或其他说明。` +
+				` 用户：${ask} 助手：${reply}`;
+			const title = await runCodemHeadless(this.pluginOpts(), prompt, 30000);
+			// stdout 可能混入 CLI 版本提示等噪音行，取最后一行作标题
+			const lines = (title ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+			const clean = (lines.pop() ?? '')
+				.replace(/^[\s"'「『【]+|[\s"'」』】。.]+$/g, '')
+				.slice(0, 20)
+				.trim();
+			if (!clean || !tab.sessionId) return;
+			this.plugin.settings.sessionTitles[tab.sessionId] = clean;
+			await this.plugin.saveSettings();
+			if (this.histOpen) this.filterHistory(); // 浮层开着则即时刷新标题
+		} catch {
+			// 标题生成失败静默：历史列表继续显示首问
 		}
 	}
 
@@ -1100,12 +1136,19 @@ export class CodeMChatView extends ItemView {
 		this.inputEl.focus();
 	}
 
-	/** 输入内容实时过滤历史会话（按首问子串） */
+	/** 输入内容实时过滤历史会话（按 AI 标题/首问子串） */
 	private filterHistory(): void {
 		const q = this.inputEl.value.trim().toLowerCase();
-		this.histItems = q ? this.allCards.filter((c) => c.firstPrompt.toLowerCase().includes(q)) : this.allCards;
+		this.histItems = q
+			? this.allCards.filter((c) => this.sessionTitle(c).toLowerCase().includes(q))
+			: this.allCards;
 		this.histIndex = 0;
 		this.renderHistoryPanel();
+	}
+
+	/** 会话显示标题：AI 生成（settings.sessionTitles）优先，无则回退首问 */
+	private sessionTitle(c: SessionCard): string {
+		return this.plugin.settings.sessionTitles[c.sessionId] || c.firstPrompt;
 	}
 
 	private renderHistoryPanel(): void {
@@ -1121,7 +1164,7 @@ export class CodeMChatView extends ItemView {
 			const turnTxt = c.userTurns > 0 ? ` · ${c.userTurns}问` : '';
 			const row = this.histEl!.createDiv({ cls: 'codem-suggest-item' + (i === this.histIndex ? ' is-active' : '') });
 			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src}${turnTxt}` });
-			row.createSpan({ cls: 'codem-suggest-desc', text: c.firstPrompt });
+			row.createSpan({ cls: 'codem-suggest-desc', text: this.sessionTitle(c) });
 			row.addEventListener('mousedown', (e) => e.preventDefault());
 			row.addEventListener('click', () => {
 				this.closeHistory();
@@ -1197,7 +1240,7 @@ export class CodeMChatView extends ItemView {
 			const head = this.msgContainer.createDiv({ cls: 'codem-chat-history-head' });
 			const src = card.source === 'bot' ? '飞书' : card.source === 'tui' ? '终端' : 'CLI';
 			head.setText(
-				`📜 ${card.firstPrompt.slice(0, 40)}（${src} · ${card.userTurns} 问）` +
+				`📜 ${this.sessionTitle(card).slice(0, 40)}（${src} · ${card.userTurns} 问）` +
 					(this.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
 			);
 			this.msgContainer.scrollTop = this.msgContainer.scrollHeight;

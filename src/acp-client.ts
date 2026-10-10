@@ -60,6 +60,54 @@ export function findNodeDir(userOverride?: string): string | null {
 	return null;
 }
 
+/**
+ * 无头一次性调用 `codem -p`（不走 ACP 长连接），返回 stdout 文本；失败/超时返回 null。
+ * 用于轻量后台任务（如会话标题生成）。提示词与参数需避免双引号（cmd /c 转义限制）。
+ */
+export async function runCodemHeadless(opts: AcpOptions, prompt: string, timeoutMs = 30000): Promise<string | null> {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	const nodeDir = findNodeDir(opts.nodePath);
+	const sysDirs = ['C:\\Windows\\System32', 'C:\\Windows'];
+	if (nodeDir) sysDirs.push(nodeDir);
+	env.PATH = [...sysDirs, env.PATH ?? ''].join(';');
+	const comspec = env.ComSpec && fs.existsSync(env.ComSpec) ? env.ComSpec : 'C:\\Windows\\System32\\cmd.exe';
+	return new Promise((resolve) => {
+		const child = spawn(comspec, ['/c', expandPath(opts.cliPath), '-p', prompt], {
+			cwd: opts.cwd,
+			windowsHide: true,
+			env,
+		});
+		let out = '';
+		let done = false;
+		const finish = (v: string | null): void => {
+			if (!done) {
+				done = true;
+				resolve(v);
+			}
+		};
+		const timer = setTimeout(() => {
+			try {
+				child.kill();
+			} catch {
+				// 已退出
+			}
+			finish(null);
+		}, timeoutMs);
+		child.stdout?.on('data', (c: Buffer) => (out += c.toString('utf8')));
+		child.stderr?.on('data', () => {
+			// 版本提示等噪音走 stderr，忽略
+		});
+		child.on('error', () => {
+			clearTimeout(timer);
+			finish(null);
+		});
+		child.on('close', () => {
+			clearTimeout(timer);
+			finish(out.trim() || null);
+		});
+	});
+}
+
 interface Pending {
 	resolve: (v: unknown) => void;
 	reject: (e: Error) => void;

@@ -136,6 +136,14 @@ async function buildCard(sessionId: string, filePath: string, counts: Map<string
 		return null;
 	}
 	if (!firstPrompt) return null; // 空会话（仅 header 占位）或异常文件不进列表
+	// 标题生成的无头任务会话不进列表
+	if (firstPrompt.startsWith('[标题生成]')) return null;
+	// 软续接快照会话：首问显示 [本次问题] 部分
+	if (firstPrompt.startsWith('[背景]')) {
+		const m2 = firstPrompt.match(/\[本次问题\]\s*([\s\S]*)/);
+		if (m2?.[1].trim()) firstPrompt = m2[1].trim();
+		else return null;
+	}
 	let st: fs.Stats;
 	try {
 		st = await fs.promises.stat(filePath);

@@ -12,6 +12,8 @@ export interface CodeMSettings {
 	extraArgs: string;
 	/** 多窗口模式：同时打开的聊天窗口上限 */
 	maxWindows: number;
+	/** AI 生成的会话标题（sessionId → 标题），优先于历史列表里的首问显示 */
+	sessionTitles: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: CodeMSettings = {
@@ -20,6 +22,7 @@ export const DEFAULT_SETTINGS: CodeMSettings = {
 	timeoutMs: 300000,
 	extraArgs: '',
 	maxWindows: 3,
+	sessionTitles: {},
 };
 
 export class CodeMSettingTab extends PluginSettingTab {
