@@ -22,10 +22,18 @@ const FOLDER_INJECT_MAX = 12000;
 const SUGGEST_MAX = 50;
 
 interface ToolCard {
-	itemEl: HTMLElement;
+	detailsEl: HTMLDetailsElement;
 	headEl: HTMLElement;
 	title: string;
 	status: string;
+}
+
+/** 流式正文段：阶段性输出 / 最终结论各成一段（工具事件到达时收束） */
+interface TextSeg {
+	el: HTMLElement;
+	buf: string;
+	shown: number;
+	done: boolean;
 }
 
 /** 一轮对话的渲染句柄（onUpdate 回调据此路由到当前消息块） */
@@ -34,9 +42,10 @@ interface RenderState {
 	thinking: HTMLDetailsElement;
 	thinkingSummary: HTMLElement;
 	thinkingBody: HTMLElement;
-	toolsEl: HTMLDetailsElement;
-	toolsSummary: HTMLElement;
-	textEl: HTMLElement;
+	/** 时间线插入锚点：思考区 → 工具卡片/正文段依次后移 */
+	anchor: HTMLElement;
+	curSeg: TextSeg | null;
+	textSegs: TextSeg[];
 	cards: Map<string, ToolCard>;
 }
 
@@ -521,12 +530,9 @@ export class CodeMChatView extends ItemView {
 
 	private async startNewSession(): Promise<void> {
 		const tab = this.activeTab;
-		if (tab.busy) {
-			new Notice('CodeM 执行中，等本轮结束后再开新会话');
-			return;
-		}
-		// 当前 tab 还没开始过对话 → 就地重置，不占 tab 额度
-		if (!tab.sessionId && tab.turnCount === 0 && !tab.pendingContext) {
+		// 当前 tab 还没开始过对话（且非执行中）→ 就地重置，不占 tab 额度；
+		// busy 时跳过重置直接新开 tab：多会话并行，执行中的会话继续跑
+		if (!tab.busy && !tab.sessionId && tab.turnCount === 0 && !tab.pendingContext) {
 			this.resetActiveTab();
 			return;
 		}
@@ -730,24 +736,18 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	/** 一轮完成收尾：停打字机、渲染全文、折叠思考/工具区 */
+	/** 一轮完成收尾：停打字机、收束正文段、折叠思考区 */
 	private finishTurn(st: RenderState, tab: ChatTab): void {
 		if (tab.typeTimer !== null) {
 			window.clearInterval(tab.typeTimer);
 			tab.typeTimer = null;
 		}
-		st.textEl.innerHTML = renderMarkdown(tab.mdBuffer);
+		this.flushSeg(st);
 		if (st.thinkingBody.textContent) {
 			st.thinkingSummary.setText('思考过程');
 			st.thinking.removeAttribute('open');
 		} else {
 			st.thinking.hide();
-		}
-		if (st.cards.size > 0) {
-			st.toolsSummary.setText(`🔧 工具调用 ${st.cards.size} 项`);
-			st.toolsEl.removeAttribute('open');
-		} else {
-			st.toolsEl.hide();
 		}
 	}
 
@@ -784,11 +784,65 @@ export class CodeMChatView extends ItemView {
 		if (text) {
 			const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
 			body.innerHTML = renderMarkdown(text);
+			this.linkifyWikilinks(body);
 		}
 		for (const img of images) {
 			userBlock.createEl('img', { cls: 'codem-chat-img', attr: { src: `data:${img.mime};base64,${img.data}` } });
 		}
 		return userBlock;
+	}
+
+	/**
+	 * 发送 prompt → 仅展示用文本：剔除注入的笔记/文件夹全文（📎 标记）、
+	 * 软续接快照背景（[背景]…[本次问题]）、图片 base64 内嵌——用户消息只留提问本身
+	 */
+	private cleanPromptForDisplay(text: string): string {
+		let s = text;
+		const qi = s.indexOf('\n[本次问题]\n');
+		if (s.startsWith('[背景]') && qi >= 0) s = s.slice(qi + '\n[本次问题]\n'.length);
+		const ai = s.indexOf('📎 附加知识库内容：');
+		if (ai >= 0) s = s.slice(0, ai);
+		s = s.replace(/\[图片附件\d+\][\s\S]*?data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g, '');
+		// 剔除注入产生的孤立分隔线
+		s = s.replace(/\n---\s*$/g, '').trim();
+		return s;
+	}
+
+	/** 文本节点中的 [[笔记|显示名]] → 可点击内部链接（Obsidian 主题样式） */
+	private linkifyWikilinks(root: HTMLElement): void {
+		const re = /\[\[([^\[\]|]+)(?:\|([^\[\]]*))?\]\]/g;
+		const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+		const nodes: Text[] = [];
+		while (walker.nextNode()) {
+			const t = walker.currentNode as Text;
+			if (re.test(t.textContent ?? '')) nodes.push(t);
+			re.lastIndex = 0;
+		}
+		for (const node of nodes) {
+			const text = node.textContent ?? '';
+			const frag = document.createDocumentFragment();
+			let last = 0;
+			let m: RegExpExecArray | null;
+			re.lastIndex = 0;
+			while ((m = re.exec(text))) {
+				if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+				const ref = m[1];
+				const a = document.createElement('a');
+				a.className = 'internal-link';
+				a.setText((m[2] || ref).trim());
+				a.setAttribute('data-href', ref);
+				a.onclick = (e) => {
+					e.preventDefault();
+					const dest = this.app.metadataCache.getFirstLinkpathDest(ref, '');
+					if (dest) void this.app.workspace.openLinkText(dest.path, '');
+					else new Notice(`未找到引用目标：${ref}`);
+				};
+				frag.appendChild(a);
+				last = m.index + m[0].length;
+			}
+			if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+			node.replaceWith(frag);
+		}
 	}
 
 	/** 轮次锚点：记录序号与摘要供导航按钮组/目录浮层使用 */
@@ -806,12 +860,8 @@ export class CodeMChatView extends ItemView {
 		thinking.setAttribute('open', '');
 		const thinkingSummary = thinking.createEl('summary', { text: '思考中…' });
 		const thinkingBody = thinking.createDiv({ cls: 'codem-chat-thinking-body' });
-		const toolsEl = aiBlock.createEl('details', { cls: 'codem-chat-tools' });
-		const toolsSummary = toolsEl.createEl('summary', { text: '🔧 工具调用中…' });
-		toolsEl.hide();
-		const textEl = aiBlock.createDiv({ cls: 'codem-chat-text markdown-rendered' });
 		this.scrollBottom();
-		return { aiBlock, thinking, thinkingSummary, thinkingBody, toolsEl, toolsSummary, textEl, cards: new Map() };
+		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map() };
 	}
 
 	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
@@ -862,11 +912,12 @@ export class CodeMChatView extends ItemView {
 	private startTypewriter(st: RenderState, tab: ChatTab): void {
 		this.stopTypewriter(tab);
 		tab.typeTimer = window.setInterval(() => {
-			const target = tab.mdBuffer.length;
-			if (tab.displayLen >= target) return;
-			const step = Math.max(1, Math.ceil((target - tab.displayLen) / 15));
-			tab.displayLen = Math.min(target, tab.displayLen + step);
-			st.textEl.innerHTML = renderMarkdown(tab.mdBuffer.slice(0, tab.displayLen));
+			// 仅追赶当前活动段（已收束段落已定格全文）
+			const seg = st.curSeg;
+			if (!seg || seg.shown >= seg.buf.length) return;
+			const step = Math.max(1, Math.ceil((seg.buf.length - seg.shown) / 15));
+			seg.shown = Math.min(seg.buf.length, seg.shown + step);
+			seg.el.innerHTML = renderMarkdown(seg.buf.slice(0, seg.shown));
 			this.scrollBottom(tab.scrollEl);
 		}, TYPE_INTERVAL);
 	}
@@ -892,7 +943,19 @@ export class CodeMChatView extends ItemView {
 		const content = update.content as { text?: string } | undefined;
 
 		if (kind === 'agent_message_chunk') {
-			tab.mdBuffer += content?.text ?? '';
+			const text = content?.text ?? '';
+			tab.mdBuffer += text;
+			// 时间线分段：无活动段则新开一段（插在最近工具卡片之后）——
+			// 阶段性输出紧跟其上方工具调用，最后一段即最终结论，自然落在最下方
+			if (!st.curSeg) {
+				const el = document.createElement('div');
+				el.className = 'codem-chat-text markdown-rendered';
+				st.anchor.after(el);
+				st.anchor = el;
+				st.curSeg = { el, buf: '', shown: 0, done: false };
+				st.textSegs.push(st.curSeg);
+			}
+			st.curSeg.buf += text;
 		} else if (kind === 'agent_thought_chunk') {
 			st.thinkingBody.textContent += content?.text ?? '';
 			st.thinkingBody.scrollTop = st.thinkingBody.scrollHeight;
@@ -905,33 +968,39 @@ export class CodeMChatView extends ItemView {
 	private handleToolEvent(st: RenderState, update: Record<string, unknown>, scrollEl?: HTMLElement): void {
 		const id = update.toolCallId as string;
 		const status = (update.status as string) || '';
+		// 工具事件收束当前正文段：阶段输出定格在其上方对应位置
+		this.flushSeg(st);
 		let card = st.cards.get(id);
 		if (!card) {
 			const title = (update.title as string) || (update.kind as string) || '工具';
-			const itemEl = st.toolsEl.createDiv({ cls: 'codem-chat-tool-item' });
-			const headEl = itemEl.createDiv({ cls: 'codem-chat-tool-head' });
+			// 独立工具卡片（时间线节点）：执行中展开，完成后收起，失败保持展开
+			const details = document.createElement('details');
+			details.className = 'codem-chat-tool';
+			details.setAttribute('open', '');
+			st.anchor.after(details);
+			st.anchor = details;
+			const headEl = details.createEl('summary', { cls: 'codem-chat-tool-head' });
 			headEl.setText(`${title} ${statusMark(status)}`.trimEnd());
 			const rawInput = update.rawInput;
 			if (rawInput && Object.keys(rawInput as object).length > 0) {
-				itemEl.createDiv({ cls: 'codem-chat-tool-raw' }).setText(JSON.stringify(rawInput).slice(0, 300));
+				details.createDiv({ cls: 'codem-chat-tool-raw' }).setText(JSON.stringify(rawInput).slice(0, 300));
 			}
-			card = { itemEl, headEl, title, status };
+			card = { detailsEl: details, headEl, title, status };
 			st.cards.set(id, card);
-			st.toolsEl.show();
-			st.toolsSummary.setText(`🔧 工具调用 ${st.cards.size} 项（执行中…）`);
 		} else {
 			const incomingTitle = update.title as string | undefined;
 			if (incomingTitle) card.title = incomingTitle;
 			if (status && status !== card.status) {
 				card.status = status;
 				card.headEl.setText(`${card.title} ${statusMark(status)}`.trimEnd());
+				if (status === 'completed') card.detailsEl.removeAttribute('open');
 			}
 		}
 		const contents = (update.content as Array<{ text?: string; content?: { text?: string } }>) ?? [];
 		for (const c of contents) {
 			const text = c?.content?.text ?? c?.text;
 			if (text) {
-				card.itemEl.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(
+				card.detailsEl.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(
 					text.length > TOOL_RESULT_MAX_LEN
 						? text.slice(0, TOOL_RESULT_MAX_LEN) + `…（截断，共 ${text.length} 字符）`
 						: text
@@ -941,6 +1010,15 @@ export class CodeMChatView extends ItemView {
 		this.scrollBottom(scrollEl);
 	}
 
+	/** 收束当前流式正文段：全文渲染定格，打字机不再写它 */
+	private flushSeg(st: RenderState): void {
+		const seg = st.curSeg;
+		if (!seg) return;
+		st.curSeg = null;
+		seg.done = true;
+		seg.el.innerHTML = renderMarkdown(seg.buf);
+	}
+
 	private handlePermission(
 		params: Record<string, unknown>,
 		respond: (result: unknown) => void
@@ -948,8 +1026,8 @@ export class CodeMChatView extends ItemView {
 		// 按 sessionId 路由到发起 tab；协议未带时退回当前 tab
 		const tab = this.tabs.find((t) => t.sessionId === params.sessionId) ?? this.activeTab;
 		const st = tab.current;
-		const tool = params.toolCall as { title?: string } | undefined;
-		const label = tool?.title ?? '工具请求权限';
+		const toolCall = params.toolCall as { toolCallId?: string; title?: string } | undefined;
+		const label = toolCall?.title ?? '工具请求权限';
 		const options = (params.options as Array<{ optionId: string; name: string; kind?: string }>) ?? [];
 		const allow = options.find((o) => String(o.kind).startsWith('allow'));
 
@@ -957,14 +1035,20 @@ export class CodeMChatView extends ItemView {
 			respond({ outcome: { outcome: 'cancelled' } });
 			return;
 		}
+		// 宿主：对应工具卡片内部（通知/确认条跟随该工具，不挤在正文后）；无卡片退回 aiBlock 末尾
+		let host: HTMLElement = st.aiBlock;
+		if (toolCall?.toolCallId) {
+			const card = st.cards.get(toolCall.toolCallId);
+			if (card) host = card.detailsEl;
+		}
 		if (this.yolo && allow) {
 			respond({ outcome: { outcome: 'selected', optionId: allow.optionId } });
-			const note = st.aiBlock.createDiv({ cls: 'codem-chat-perm codem-chat-perm-auto' });
+			const note = host.createDiv({ cls: 'codem-chat-perm codem-chat-perm-auto' });
 			note.setText(`🤖 yolo 自动批准：${label}`);
 			this.scrollBottom(tab.scrollEl);
 			return;
 		}
-		const bar = st.aiBlock.createDiv({ cls: 'codem-chat-perm' });
+		const bar = host.createDiv({ cls: 'codem-chat-perm' });
 		bar.createSpan({ text: `🔒 ${label}` });
 		for (const opt of options) {
 			bar.createEl('button', { text: opt.name }).onclick = () => {
@@ -1149,8 +1233,9 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 		if (this.busy) {
-			new Notice('CodeM 执行中，稍后再切换会话');
-			return;
+			// 当前会话执行中：自动新开 tab 承接历史载入（并行不中断）；达上限则放弃
+			await this.startNewSession();
+			if (this.busy) return;
 		}
 		this.closeSuggest();
 		if (!this.histEl) this.histEl = this.inputWrapEl.createDiv({ cls: 'codem-suggest codem-hist-panel' });
@@ -1306,7 +1391,8 @@ export class CodeMChatView extends ItemView {
 
 	private renderHistoryTurn(t: Turn): void {
 		if (t.role === 'user') {
-			const userBlock = this.renderUserMessage(t.blocks.map((b) => b.content).join('\n\n'), []);
+			// jsonl 记录的是完整 prompt（含注入全文/快照/图片 base64），回显前清洗为提问本身
+			const userBlock = this.renderUserMessage(this.cleanPromptForDisplay(t.blocks.map((b) => b.content).join('\n\n')), []);
 			this.addTurnAnchor(userBlock);
 		} else if (t.role === 'assistant') {
 			const aiBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });

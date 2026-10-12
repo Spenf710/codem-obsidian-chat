@@ -368,6 +368,32 @@
 	color: var(--text-muted);
 }
 
+/* 独立工具卡片（时间线节点）：执行中展开、完成收起 */
+.codem-chat-tool {
+	margin: 4px 0;
+	padding: 4px 8px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.codem-chat-tool summary {
+	cursor: pointer;
+	user-select: none;
+}
+
+.codem-chat-tool .codem-chat-tool-raw {
+	margin-top: 4px;
+}
+
+/* 时间线正文段（阶段性输出/最终结论）段间距 */
+.codem-chat-text + .codem-chat-text,
+.codem-chat-tool + .codem-chat-text,
+.codem-chat-text + .codem-chat-tool {
+	margin-top: 6px;
+}
+
 .codem-chat-toolitem-standalone {
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
