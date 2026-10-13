@@ -391,7 +391,7 @@ export class CodeMChatView extends ItemView {
 		}
 		if (!this.dirEl) this.dirEl = this.msgArea.createDiv({ cls: 'codem-chat-dir' });
 		this.buildDirList();
-		this.dirEl.style.display = 'flex';
+		this.dirEl.addClass('is-open');
 		this.dirOpen = true;
 	}
 
@@ -416,7 +416,7 @@ export class CodeMChatView extends ItemView {
 
 	private closeDir(): void {
 		this.dirOpen = false;
-		if (this.dirEl) this.dirEl.style.display = 'none';
+		if (this.dirEl) this.dirEl.removeClass('is-open');
 	}
 
 	private resetTurnNav(): void {
@@ -475,7 +475,7 @@ export class CodeMChatView extends ItemView {
 		this.closeDir();
 		this.closeSuggest();
 		this.closeHistory();
-		for (const t of this.tabs) t.scrollEl.style.display = t === tab ? '' : 'none';
+		for (const t of this.tabs) t.scrollEl.toggleClass('codem-is-hidden', t !== tab);
 		this.activeTab = tab;
 		this.renderTabs();
 		this.renderPreviews();
@@ -544,7 +544,7 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 		this.closeDir();
-		for (const t of this.tabs) t.scrollEl.style.display = 'none';
+		for (const t of this.tabs) t.scrollEl.addClass('codem-is-hidden');
 		this.activeTab = this.createTab();
 		this.renderEmpty();
 		this.renderTabs();
@@ -792,7 +792,7 @@ export class CodeMChatView extends ItemView {
 		const userBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-user' });
 		if (text) {
 			const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
-			body.innerHTML = renderMarkdown(text);
+			body.appendChild(renderMarkdown(text));
 			this.linkifyWikilinks(body);
 		}
 		for (const img of images) {
@@ -819,7 +819,7 @@ export class CodeMChatView extends ItemView {
 
 	/** 文本节点中的 [[笔记|显示名]] → 可点击内部链接（Obsidian 主题样式） */
 	private linkifyWikilinks(root: HTMLElement): void {
-		const re = /\[\[([^\[\]|]+)(?:\|([^\[\]]*))?\]\]/g;
+		const re = /\[\[([^\][|]+)(?:\|([^\]]*))?\]\]/g;
 		const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 		const nodes: Text[] = [];
 		while (walker.nextNode()) {
@@ -829,15 +829,14 @@ export class CodeMChatView extends ItemView {
 		}
 		for (const node of nodes) {
 			const text = node.textContent ?? '';
-			const frag = document.createDocumentFragment();
+			const frag = createFragment();
 			let last = 0;
 			let m: RegExpExecArray | null;
 			re.lastIndex = 0;
 			while ((m = re.exec(text))) {
 				if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
 				const ref = m[1];
-				const a = document.createElement('a');
-				a.className = 'internal-link';
+				const a = frag.createEl('a', { cls: 'internal-link' });
 				a.setText((m[2] || ref).trim());
 				a.setAttribute('data-href', ref);
 				a.onclick = (e) => {
@@ -846,7 +845,6 @@ export class CodeMChatView extends ItemView {
 					if (dest) void this.app.workspace.openLinkText(dest.path, '');
 					else new Notice(`未找到引用目标：${ref}`);
 				};
-				frag.appendChild(a);
 				last = m.index + m[0].length;
 			}
 			if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
@@ -875,7 +873,7 @@ export class CodeMChatView extends ItemView {
 
 	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
 	private async resolveNoteContexts(prompt: string): Promise<string> {
-		const refs = [...prompt.matchAll(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g)];
+		const refs = [...prompt.matchAll(/\[\[([^\][|]+)(?:\|[^\]]*)?\]\]/g)];
 		if (!refs.length) return prompt;
 		const extras: string[] = [];
 		for (const m of refs) {
@@ -926,7 +924,8 @@ export class CodeMChatView extends ItemView {
 			if (!seg || seg.shown >= seg.buf.length) return;
 			const step = Math.max(1, Math.ceil((seg.buf.length - seg.shown) / 15));
 			seg.shown = Math.min(seg.buf.length, seg.shown + step);
-			seg.el.innerHTML = renderMarkdown(seg.buf.slice(0, seg.shown));
+			seg.el.empty();
+			seg.el.appendChild(renderMarkdown(seg.buf.slice(0, seg.shown)));
 			this.scrollBottom(tab.scrollEl);
 		}, TYPE_INTERVAL);
 	}
@@ -957,8 +956,7 @@ export class CodeMChatView extends ItemView {
 			// 时间线分段：无活动段则新开一段（插在最近工具卡片之后）——
 			// 阶段性输出紧跟其上方工具调用，最后一段即最终结论，自然落在最下方
 			if (!st.curSeg) {
-				const el = document.createElement('div');
-				el.className = 'codem-chat-text markdown-rendered';
+				const el = createEl('div', { cls: 'codem-chat-text markdown-rendered' });
 				st.anchor.after(el);
 				st.anchor = el;
 				st.curSeg = { el, buf: '', shown: 0, done: false };
@@ -983,15 +981,14 @@ export class CodeMChatView extends ItemView {
 		if (!card) {
 			const title = (update.title as string) || (update.kind as string) || '工具';
 			// 独立工具卡片（时间线节点）：执行中展开，完成后收起，失败保持展开
-			const details = document.createElement('details');
-			details.className = 'codem-chat-tool';
+			const details = createEl('details', { cls: 'codem-chat-tool' });
 			details.setAttribute('open', '');
 			st.anchor.after(details);
 			st.anchor = details;
 			const headEl = details.createEl('summary', { cls: 'codem-chat-tool-head' });
 			headEl.setText(`${title} ${statusMark(status)}`.trimEnd());
 			const rawInput = update.rawInput;
-			if (rawInput && Object.keys(rawInput as object).length > 0) {
+			if (rawInput && typeof rawInput === 'object' && Object.keys(rawInput).length > 0) {
 				details.createDiv({ cls: 'codem-chat-tool-raw' }).setText(JSON.stringify(rawInput).slice(0, 300));
 			}
 			card = { detailsEl: details, headEl, title, status };
@@ -1031,7 +1028,8 @@ export class CodeMChatView extends ItemView {
 		if (!seg) return;
 		st.curSeg = null;
 		seg.done = true;
-		seg.el.innerHTML = renderMarkdown(seg.buf);
+		seg.el.empty();
+		seg.el.appendChild(renderMarkdown(seg.buf));
 	}
 
 	private handlePermission(
@@ -1071,15 +1069,13 @@ export class CodeMChatView extends ItemView {
 		};
 		if (this.yolo && allow) {
 			respond({ outcome: { outcome: 'selected', optionId: allow.optionId } });
-			const note = document.createElement('div');
-			note.className = 'codem-chat-perm codem-chat-perm-auto';
+			const note = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
 			note.setText(`🤖 yolo 自动批准：${label}`);
 			park(note);
 			this.scrollBottom(tab.scrollEl);
 			return;
 		}
-		const bar = document.createElement('div');
-		bar.className = 'codem-chat-perm';
+		const bar = createEl('div', { cls: 'codem-chat-perm' });
 		bar.createSpan({ text: `🔒 ${label}` });
 		for (const opt of options) {
 			bar.createEl('button', { text: opt.name }).onclick = () => {
@@ -1098,7 +1094,7 @@ export class CodeMChatView extends ItemView {
 		const el = this.inputEl;
 		const pos = el.selectionStart ?? 0;
 		const before = el.value.slice(0, pos);
-		const m = before.match(/(^|\s)([\/@])([^\s]*)$/);
+		const m = before.match(/(^|\s)([/@])([^\s]*)$/);
 		if (!m) {
 			this.closeSuggest();
 			return;
@@ -1141,14 +1137,14 @@ export class CodeMChatView extends ItemView {
 			const q = query.toLowerCase();
 			const folders: SuggestItem[] = [];
 			for (const af of this.app.vault.getAllLoadedFiles()) {
-				if (!af.path || af.path.startsWith('.obsidian')) continue;
+				if (!af.path || af.path.startsWith(this.app.vault.configDir)) continue;
 				if (af instanceof TFolder && af.path.toLowerCase().includes(q)) {
 					folders.push({ label: `📁 ${af.path}`, desc: '', insert: `[[${af.path}]] `, vaultPath: af.path, isFolder: true });
 				}
 			}
 			const files = this.app.vault
 				.getFiles()
-				.filter((f) => !f.path.startsWith('.obsidian') && f.path.toLowerCase().includes(q))
+				.filter((f) => !f.path.startsWith(this.app.vault.configDir) && f.path.toLowerCase().includes(q))
 				.sort((a, b) => a.path.localeCompare(b.path))
 				.map((f) => ({ label: f.path, desc: f.extension, insert: `[[${f.path}]] ` }));
 			const items = [...folders.sort((a, b) => a.label.localeCompare(b.label)), ...files].slice(0, SUGGEST_MAX);
@@ -1176,7 +1172,7 @@ export class CodeMChatView extends ItemView {
 			.map((c) => ({ label: `📁 ${c.name}`, desc: '', insert: `[[${c.path}]] `, vaultPath: c.path, isFolder: true }));
 		const files = this.app.vault
 			.getFiles()
-			.filter((f) => f.parent?.path === dir.path && !f.path.startsWith('.obsidian'))
+			.filter((f) => f.parent?.path === dir.path && !f.path.startsWith(this.app.vault.configDir))
 			.filter((f) => f.name.toLowerCase().includes(filter))
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((f) => ({ label: f.name, desc: f.extension, insert: `[[${f.path}]] ` }));
@@ -1273,7 +1269,7 @@ export class CodeMChatView extends ItemView {
 		if (!this.histEl) this.histEl = this.inputWrapEl.createDiv({ cls: 'codem-suggest codem-hist-panel' });
 		this.histEl.empty();
 		this.histEl.createDiv({ cls: 'codem-hist-loading', text: '扫描 ~/.codem/sessions …' });
-		this.histEl.style.display = 'block';
+		this.histEl.addClass('is-open');
 		this.histOpen = true;
 		try {
 			this.allCards = await listCodemSessions();
@@ -1329,7 +1325,7 @@ export class CodeMChatView extends ItemView {
 
 	private closeHistory(): void {
 		this.histOpen = false;
-		if (this.histEl) this.histEl.style.display = 'none';
+		if (this.histEl) this.histEl.removeClass('is-open');
 	}
 
 	/** 载入历史会话：jsonl 回显 + ACP session/load 原生续接；失败自动转软续接（快照上下文） */
@@ -1436,7 +1432,8 @@ export class CodeMChatView extends ItemView {
 			}
 			for (const b of t.blocks) {
 				if (b.kind === 'text') {
-					aiBlock.createDiv({ cls: 'codem-chat-text markdown-rendered' }).innerHTML = renderMarkdown(b.content);
+					const segEl = aiBlock.createDiv({ cls: 'codem-chat-text markdown-rendered' });
+					segEl.appendChild(renderMarkdown(b.content));
 				}
 			}
 			const tools = t.blocks.filter((b) => b.kind === 'tool_use');

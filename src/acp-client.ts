@@ -87,7 +87,7 @@ export async function runCodemHeadless(opts: AcpOptions, prompt: string, timeout
 				resolve(v);
 			}
 		};
-		const timer = setTimeout(() => {
+		const timer = window.setTimeout(() => {
 			try {
 				child.kill();
 			} catch {
@@ -100,11 +100,11 @@ export async function runCodemHeadless(opts: AcpOptions, prompt: string, timeout
 			// 版本提示等噪音走 stderr，忽略
 		});
 		child.on('error', () => {
-			clearTimeout(timer);
+			window.clearTimeout(timer);
 			finish(null);
 		});
 		child.on('close', () => {
-			clearTimeout(timer);
+			window.clearTimeout(timer);
 			finish(out.trim() || null);
 		});
 	});

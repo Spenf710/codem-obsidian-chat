@@ -592,3 +592,16 @@
 	border-color: var(--interactive-accent);
 	color: var(--text-normal);
 }
+
+/* ===== 审查合规：CSS 类替代内联 style 赋值 ===== */
+.codem-is-hidden {
+	display: none !important;
+}
+
+.codem-chat-dir.is-open {
+	display: flex;
+}
+
+.codem-suggest.is-open {
+	display: block;
+}

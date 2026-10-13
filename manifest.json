@@ -1,8 +1,8 @@
 {
 	"id": "codem-chat",
 	"name": "CodeM Chat",
-	"version": "0.1.2",
-	"minAppVersion": "1.5.0",
+	"version": "0.1.3",
+	"minAppVersion": "1.7.2",
 	"description": "Embeds CodeM (Feishu AI coding agent) as a sidebar chat in your vault. Your vault becomes its working directory.",
 	"author": "Pengfei Sun",
 	"isDesktopOnly": true

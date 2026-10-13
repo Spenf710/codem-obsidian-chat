@@ -1,4 +1,4 @@
-import { Notice, Plugin, WorkspaceLeaf } from 'obsidian';
+import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { CodeMChatView, VIEW_TYPE_CODEM_CHAT } from './view';
 import { CodeMSettingTab, CodeMSettings, DEFAULT_SETTINGS } from './settings';
 
@@ -13,7 +13,7 @@ export default class CodeMChatPlugin extends Plugin {
 		this.addRibbonIcon('message-square', '打开 CodeM 聊天框', () => void this.activateView());
 
 		this.addCommand({
-			id: 'open-codem-chat',
+			id: 'open-chat',
 			name: '打开 CodeM 聊天框',
 			callback: () => void this.activateView(),
 		});
@@ -33,7 +33,7 @@ export default class CodeMChatPlugin extends Plugin {
 			leaf = workspace.getRightLeaf(false)!;
 			await leaf.setViewState({ type: VIEW_TYPE_CODEM_CHAT, active: true });
 		}
-		workspace.revealLeaf(leaf);
+		void workspace.revealLeaf(leaf);
 	}
 
 	async loadSettings(): Promise<void> {
