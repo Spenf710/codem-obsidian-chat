@@ -47,6 +47,8 @@ interface RenderState {
 	curSeg: TextSeg | null;
 	textSegs: TextSeg[];
 	cards: Map<string, ToolCard>;
+	/** 早于 tool_call 通知到达的权限条暂存（toolCallId → 条目），卡片创建时回挂 */
+	pendingPerms: Map<string, HTMLElement[]>;
 }
 
 /** 待发送图片（粘贴直接进内存，base64 无 data: 前缀） */
@@ -749,6 +751,13 @@ export class CodeMChatView extends ItemView {
 		} else {
 			st.thinking.hide();
 		}
+		// 兜底：轮结束仍无对应卡片的权限条（plan 批准等无 tool_call 的请求）落回正文末尾，不丢信息
+		if (st.pendingPerms.size) {
+			for (const list of st.pendingPerms.values()) {
+				for (const el of list) st.aiBlock.appendChild(el);
+			}
+			st.pendingPerms.clear();
+		}
 	}
 
 	/**
@@ -861,7 +870,7 @@ export class CodeMChatView extends ItemView {
 		const thinkingSummary = thinking.createEl('summary', { text: '思考中…' });
 		const thinkingBody = thinking.createDiv({ cls: 'codem-chat-thinking-body' });
 		this.scrollBottom();
-		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map() };
+		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map() };
 	}
 
 	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
@@ -987,6 +996,12 @@ export class CodeMChatView extends ItemView {
 			}
 			card = { detailsEl: details, headEl, title, status };
 			st.cards.set(id, card);
+			// 回挂早到的权限条（request_permission 先于 tool_call 到达的场景）
+			const pended = st.pendingPerms.get(id);
+			if (pended) {
+				for (const el of pended) card.detailsEl.appendChild(el);
+				st.pendingPerms.delete(id);
+			}
 		} else {
 			const incomingTitle = update.title as string | undefined;
 			if (incomingTitle) card.title = incomingTitle;
@@ -1035,20 +1050,36 @@ export class CodeMChatView extends ItemView {
 			respond({ outcome: { outcome: 'cancelled' } });
 			return;
 		}
-		// 宿主：对应工具卡片内部（通知/确认条跟随该工具，不挤在正文后）；无卡片退回 aiBlock 末尾
-		let host: HTMLElement = st.aiBlock;
+		// 宿主：对应工具卡片内部（通知/确认条跟随该工具，不挤在正文后）。
+		// CodeM 时序：request_permission 可能先于 tool_call 通知到达，此时卡片尚未创建——
+		// 条目暂存 pendingPerms，卡片创建（handleToolEvent）时回挂；无 toolCallId 才落 aiBlock 末尾
+		let host: HTMLElement | null = null;
 		if (toolCall?.toolCallId) {
 			const card = st.cards.get(toolCall.toolCallId);
 			if (card) host = card.detailsEl;
 		}
+		const park = (el: HTMLElement): void => {
+			if (host) {
+				host.appendChild(el);
+			} else if (toolCall?.toolCallId) {
+				const list = st.pendingPerms.get(toolCall.toolCallId) ?? [];
+				list.push(el);
+				st.pendingPerms.set(toolCall.toolCallId, list);
+			} else {
+				st.aiBlock.appendChild(el);
+			}
+		};
 		if (this.yolo && allow) {
 			respond({ outcome: { outcome: 'selected', optionId: allow.optionId } });
-			const note = host.createDiv({ cls: 'codem-chat-perm codem-chat-perm-auto' });
+			const note = document.createElement('div');
+			note.className = 'codem-chat-perm codem-chat-perm-auto';
 			note.setText(`🤖 yolo 自动批准：${label}`);
+			park(note);
 			this.scrollBottom(tab.scrollEl);
 			return;
 		}
-		const bar = host.createDiv({ cls: 'codem-chat-perm' });
+		const bar = document.createElement('div');
+		bar.className = 'codem-chat-perm';
 		bar.createSpan({ text: `🔒 ${label}` });
 		for (const opt of options) {
 			bar.createEl('button', { text: opt.name }).onclick = () => {
@@ -1056,6 +1087,7 @@ export class CodeMChatView extends ItemView {
 				respond({ outcome: { outcome: 'selected', optionId: opt.optionId } });
 			};
 		}
+		park(bar);
 		this.scrollBottom(tab.scrollEl);
 	}
 
