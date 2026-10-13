@@ -1266,10 +1266,13 @@ export class CodeMChatView extends ItemView {
 			if (this.busy) return;
 		}
 		this.closeSuggest();
-		if (!this.histEl) this.histEl = this.inputWrapEl.createDiv({ cls: 'codem-suggest codem-hist-panel' });
+		if (!this.histEl) {
+			this.histEl = this.inputWrapEl.createDiv({ cls: 'codem-suggest codem-hist-panel' });
+			this.histEl.hide();
+		}
 		this.histEl.empty();
 		this.histEl.createDiv({ cls: 'codem-hist-loading', text: '扫描 ~/.codem/sessions …' });
-		this.histEl.addClass('is-open');
+		this.histEl.show();
 		this.histOpen = true;
 		try {
 			this.allCards = await listCodemSessions();
@@ -1325,7 +1328,7 @@ export class CodeMChatView extends ItemView {
 
 	private closeHistory(): void {
 		this.histOpen = false;
-		if (this.histEl) this.histEl.removeClass('is-open');
+		if (this.histEl) this.histEl.hide();
 	}
 
 	/** 载入历史会话：jsonl 回显 + ACP session/load 原生续接；失败自动转软续接（快照上下文） */
