@@ -30,7 +30,7 @@ Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat. Your vault
 1. 下载 `main.js`、`styles.css`、`manifest.json` 放入你的 Vault：
 
 ```
-<Vault>/.obsidian/plugins/codem-obsidian-chat/
+<Vault>/.obsidian/plugins/codem-chat/
 ```
 
 2. 在 Obsidian 设置 → 第三方插件中启用 **CodeM Chat**。
