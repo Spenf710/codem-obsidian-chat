@@ -13,6 +13,12 @@ import {
 	type Turn,
 } from './codem-sessions';
 import { formatTime } from './pickers';
+import {
+	checkEnvironment,
+	installCodem,
+	friendlyError,
+	CODEM_INSTALL_CMD,
+} from './diagnostics';
 
 export const VIEW_TYPE_CODEM_CHAT = 'codem-chat-view';
 
@@ -72,6 +78,8 @@ interface ChatTab {
 	turnPos: number;
 	images: PendingImage[];
 	scrollEl: HTMLElement;
+	/** 最近一次收到 CodeM 更新的时间（无响应看门狗用） */
+	lastActivity: number;
 }
 
 /** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
@@ -250,7 +258,7 @@ export class CodeMChatView extends ItemView {
 		});
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
 		this.lightEl = bottomRow.createSpan({ cls: 'codem-chat-light is-idle' });
-		bottomRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM · ACP' });
+		bottomRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
 		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
 		this.yoloBtn = actions.createEl('button', { text: '🤖 YOLO', cls: 'codem-chat-yolo' });
 		this.yoloBtn.setAttribute('aria-label', 'yolo 模式：自动批准工具权限请求');
@@ -339,10 +347,95 @@ export class CodeMChatView extends ItemView {
 	}
 
 	private renderEmpty(): void {
-		this.msgContainer.createDiv({
-			cls: 'codem-chat-empty',
-			text: 'CodeM 已就绪（ACP 双向连接）。Vault 根目录即其工作目录。',
+		const el = this.msgContainer.createDiv({ cls: 'codem-chat-empty' });
+		el.setText('正在检查 CodeM 环境…');
+		void this.renderEmptyContent(el);
+	}
+
+	/** 空状态内容（异步）：按环境检测结果渲染引导或欢迎页 */
+	private async renderEmptyContent(el: HTMLElement): Promise<void> {
+		const status = await checkEnvironment(this.plugin.settings.codemCliPath, this.plugin.settings.nodePath);
+		if (!el.isConnected) return; // 检测期间用户已开始对话
+		el.empty();
+
+		if (status.state === 'ready') {
+			el.createDiv({ cls: 'codem-chat-empty-icon', text: '✳' });
+			el.createDiv({ cls: 'codem-chat-empty-title', text: 'CodeM 已就绪' });
+			el.createDiv({
+				cls: 'codem-chat-empty-sub',
+				text: '你的笔记库就是 CodeM 的工作目录，直接开始提问吧。',
+			});
+			const samples = el.createDiv({ cls: 'codem-chat-empty-samples' });
+			for (const q of [
+				'总结这个 Vault 的目录结构，用表格输出各文件夹的主题',
+				'把本周的工作日志整理成周报草稿',
+				'找出最近 7 天修改过的笔记，各写一句话摘要',
+			]) {
+				samples.createEl('button', { cls: 'codem-chat-sample', text: q }).onclick = () => {
+					this.inputEl.value = q;
+					void this.send();
+				};
+			}
+			el.createDiv({
+				cls: 'codem-chat-empty-tip',
+				text: '💡 可直接粘贴截图提问 · 输入 @ 引用笔记 · 输入 / 调用技能',
+			});
+			return;
+		}
+
+		if (status.state === 'no-node') {
+			el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
+			el.createDiv({ cls: 'codem-chat-empty-title', text: '缺少 Node.js 运行环境' });
+			el.createDiv({
+				cls: 'codem-chat-empty-sub',
+				text: '已找到 CodeM，但运行它还需要 Node.js。请到 nodejs.org 下载安装 LTS 版本，安装完成后重启 Obsidian。',
+			});
+			const retry = el.createDiv({ cls: 'codem-chat-empty-samples' });
+			retry.createEl('button', { cls: 'codem-chat-sample', text: '我已安装 Node.js，重新检查' }).onclick =
+				() => void this.refreshEnvironment();
+			return;
+		}
+
+		// missing：引导安装（欢迎页内直接提供一键安装）
+		el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
+		el.createDiv({ cls: 'codem-chat-empty-title', text: '开始之前，先安装 CodeM' });
+		el.createDiv({
+			cls: 'codem-chat-empty-sub',
+			text: 'CodeM 是飞书原生的 AI 智能体，本插件通过它读写你的笔记。检测到这台电脑尚未安装，点击下方按钮自动完成安装（需联网，约 1-3 分钟）。',
 		});
+		const actions = el.createDiv({ cls: 'codem-chat-empty-samples' });
+		const installBtn = actions.createEl('button', { cls: 'codem-chat-sample is-cta', text: '一键安装 CodeM' });
+		installBtn.onclick = () => {
+			if (installBtn.dataset.installing) return;
+			installBtn.dataset.installing = '1';
+			installBtn.textContent = '正在安装…';
+			installCodem((p) => {
+				if (!p.done) {
+					if (p.line) installBtn.textContent = `正在安装… ${p.line.slice(0, 40)}`;
+					return;
+				}
+				delete installBtn.dataset.installing;
+				if (p.code === 0) {
+					new Notice('CodeM 安装完成！', 8000);
+					void this.refreshEnvironment();
+				} else {
+					installBtn.textContent = '安装未成功，点击重试';
+					new Notice(`CodeM 安装失败（退出码 ${p.code}）。可重试，或按下方手动方式安装。`, 10000);
+				}
+			});
+		};
+		const manual = el.createEl('details', { cls: 'codem-chat-empty-manual' });
+		manual.createEl('summary', { text: '无法自动安装？手动方式' });
+		manual.createDiv({
+			cls: 'codem-chat-empty-tip',
+			text: `在 PowerShell 中执行：${CODEM_INSTALL_CMD}\n（或到飞书工作台搜索「飞书 CodeM」了解详情）`,
+		});
+	}
+
+	/** 外部触发空状态重渲染（设置页完成安装后回调） */
+	refreshEnvironment(): void {
+		const el = this.msgContainer.querySelector('.codem-chat-empty');
+		if (el) void this.renderEmptyContent(el as HTMLElement);
 	}
 
 	/** 右侧悬浮圆形导航按钮组（参考 Claudian）：⏫ ^ ☰ v ⏬ */
@@ -442,6 +535,7 @@ export class CodeMChatView extends ItemView {
 			turnPos: 0,
 			images: [],
 			scrollEl: null as unknown as HTMLElement,
+			lastActivity: 0,
 		};
 		tab.scrollEl = this.msgArea.createDiv({ cls: 'codem-chat-messages' });
 		tab.scrollEl.addEventListener('click', () => this.closeDir());
@@ -654,7 +748,7 @@ export class CodeMChatView extends ItemView {
 							t.light = 'idle';
 						}
 					}
-					new Notice(`CodeM 连接断开（退出码 ${code}）`);
+					new Notice('CodeM 服务已断开，下次发送时会自动重新连接。', 6000);
 					this.renderTabs();
 					this.setStatusLight(this.activeTab.light);
 				},
@@ -675,6 +769,23 @@ export class CodeMChatView extends ItemView {
 		this.inputEl.value = '';
 		this.closeSuggest();
 		tab.scrollEl.querySelector('.codem-chat-empty')?.remove();
+
+		// 无响应看门狗：5 分钟没有任何更新则提示一次（不中断执行，等待或重试由用户决定）
+		tab.lastActivity = Date.now();
+		let stallNotified = false;
+		const watchdog = window.setInterval(() => {
+			if (!tab.busy) {
+				window.clearInterval(watchdog);
+				return;
+			}
+			if (!stallNotified && Date.now() - tab.lastActivity > 300000) {
+				stallNotified = true;
+				new Notice(
+					'已超过 5 分钟没有新响应。若一直停在这里，请检查网络后重试；也可能是 CodeM 刚自动更新导致，可向官方反馈。',
+					12000
+				);
+			}
+		}, 30000);
 
 		const images = tab.images; // capture 引用：气泡渲染与 prompt blocks 都用它
 		tab.images = [];
@@ -723,9 +834,16 @@ export class CodeMChatView extends ItemView {
 				// 日志失败不影响错误提示
 			}
 			st.aiBlock.remove();
+			// 友好错误卡：人话标题 + 行动建议 + 技术原文折叠（排障能力保留）
+			const fe = friendlyError(detail);
 			const errBlock = tab.scrollEl.createDiv({ cls: 'codem-chat-msg codem-chat-error' });
-			errBlock.setText(detail);
+			errBlock.createDiv({ cls: 'codem-chat-error-title', text: '⚠️ ' + fe.title });
+			errBlock.createDiv({ cls: 'codem-chat-error-hint', text: fe.hint });
+			const det = errBlock.createEl('details', { cls: 'codem-chat-error-details' });
+			det.createEl('summary', { text: '查看详情' });
+			det.createDiv({ cls: 'codem-chat-error-raw', text: detail.slice(0, 2000) });
 		} finally {
+			window.clearInterval(watchdog);
 			tab.current = null;
 			tab.busy = false;
 			tab.light = 'done';
@@ -947,6 +1065,7 @@ export class CodeMChatView extends ItemView {
 		if (!tab) return; // 无归属（如历史载入重放）即忽略
 		const st = tab.current;
 		if (!st) return;
+		tab.lastActivity = Date.now();
 		const kind = update.sessionUpdate as string;
 		const content = update.content as { text?: string } | undefined;
 

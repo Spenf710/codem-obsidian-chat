@@ -20,11 +20,92 @@
 	gap: 14px;
 }
 
+/* —— 空状态欢迎页（环境感知：引导安装 / 示例问题）—— */
+
 .codem-chat-empty {
-	color: var(--text-faint);
+	color: var(--text-muted);
 	text-align: center;
-	margin-top: 40%;
+	margin-top: 18%;
+	padding: 0 12px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
 	font-size: 0.9em;
+}
+
+.codem-chat-empty-icon {
+	font-size: 2em;
+	line-height: 1;
+	opacity: 0.85;
+}
+
+.codem-chat-empty-title {
+	font-size: 1.15em;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.codem-chat-empty-sub {
+	color: var(--text-faint);
+	max-width: 30em;
+	line-height: 1.5;
+}
+
+.codem-chat-empty-samples {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	width: 100%;
+	max-width: 22em;
+	margin-top: 6px;
+}
+
+.codem-chat-sample {
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	border-radius: 8px;
+	padding: 7px 12px;
+	font-size: 0.92em;
+	color: var(--text-normal);
+	cursor: pointer;
+	text-align: left;
+	transition: background-color 120ms ease;
+}
+
+.codem-chat-sample:hover {
+	background: var(--background-modifier-hover);
+}
+
+.codem-chat-sample.is-cta {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	text-align: center;
+	font-weight: 500;
+}
+
+.codem-chat-sample.is-cta:hover {
+	opacity: 0.9;
+}
+
+.codem-chat-empty-tip {
+	color: var(--text-faint);
+	font-size: 0.88em;
+	margin-top: 4px;
+	white-space: pre-wrap;
+}
+
+.codem-chat-empty-manual {
+	width: 100%;
+	max-width: 26em;
+	text-align: left;
+	font-size: 0.88em;
+}
+
+.codem-chat-empty-manual summary {
+	cursor: pointer;
+	color: var(--text-faint);
+	margin-bottom: 4px;
 }
 
 .codem-chat-history-head {
@@ -68,14 +149,46 @@
 	margin-bottom: 0;
 }
 
+/* —— 友好错误卡：人话标题 + 建议 + 技术原文折叠 —— */
+
 .codem-chat-error {
 	align-self: stretch;
-	background: var(--background-modifier-error);
-	color: var(--text-error);
+	background: var(--background-modifier-error-soft, var(--background-secondary));
+	border: 1px solid var(--text-warning, #c9a227);
+	border-radius: 8px;
 	padding: 8px 12px;
-	border-radius: 6px;
+	font-size: var(--font-ui-small);
+}
+
+.codem-chat-error-title {
+	font-weight: 600;
+	color: var(--text-warning, #c9a227);
+	margin-bottom: 2px;
+}
+
+.codem-chat-error-hint {
+	color: var(--text-muted);
+	line-height: 1.5;
+}
+
+.codem-chat-error-details {
+	margin-top: 6px;
 	font-size: var(--font-ui-smaller);
+}
+
+.codem-chat-error-details summary {
+	cursor: pointer;
+	color: var(--text-faint);
+}
+
+.codem-chat-error-raw {
+	margin-top: 4px;
+	color: var(--text-faint);
 	white-space: pre-wrap;
+	word-break: break-all;
+	max-height: 200px;
+	overflow-y: auto;
+	font-family: var(--font-monospace);
 }
 
 /* —— 消息区 + 悬浮导航按钮组（参考 Claudian） —— */

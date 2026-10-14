@@ -1,26 +1,26 @@
 {
-	"name": "codem-chat",
-	"version": "0.1.4",
-	"description": "CodeM sidebar chat plugin for Obsidian",
-	"main": "main.js",
-	"scripts": {
-		"dev": "node esbuild.config.mjs",
-		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
-	},
-	"keywords": [],
-	"author": "Pengfei Sun",
-	"license": "MIT",
-	"devDependencies": {
-		"@types/node": "^20.14.0",
-		"esbuild": "^0.21.5",
-		"obsidian": "latest",
-		"typescript": "^5.5.4"
-	},
-	"allowScripts": {
-		"esbuild@0.21.5": true
-	},
-	"dependencies": {
-		"dompurify": "^3.4.16",
-		"marked": "^18.1.0"
-	}
+  "name": "codem-chat",
+  "version": "0.2.0",
+  "description": "CodeM sidebar chat plugin for Obsidian",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [],
+  "author": "Pengfei Sun",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "esbuild": "^0.21.5",
+    "obsidian": "latest",
+    "typescript": "^5.5.4"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  },
+  "dependencies": {
+    "dompurify": "^3.4.16",
+    "marked": "^18.1.0"
+  }
 }
