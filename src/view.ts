@@ -365,17 +365,6 @@ export class CodeMChatView extends ItemView {
 				cls: 'codem-chat-empty-sub',
 				text: '你的笔记库就是 CodeM 的工作目录，直接开始提问吧。',
 			});
-			const samples = el.createDiv({ cls: 'codem-chat-empty-samples' });
-			for (const q of [
-				'总结这个 Vault 的目录结构，用表格输出各文件夹的主题',
-				'把本周的工作日志整理成周报草稿',
-				'找出最近 7 天修改过的笔记，各写一句话摘要',
-			]) {
-				samples.createEl('button', { cls: 'codem-chat-sample', text: q }).onclick = () => {
-					this.inputEl.value = q;
-					void this.send();
-				};
-			}
 			el.createDiv({
 				cls: 'codem-chat-empty-tip',
 				text: '💡 可直接粘贴截图提问 · 输入 @ 引用笔记 · 输入 / 调用技能',
