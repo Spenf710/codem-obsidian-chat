@@ -1,8 +1,11 @@
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import type CodeMChatPlugin from './main';
+import { expandPath } from './acp-client';
 import {
 	checkEnvironment,
 	installCodem,
+	probeCodemCli,
+	toTildePath,
 	CODEM_INSTALL_CMD,
 	abbreviateHome,
 	type EnvStatus,
@@ -140,7 +143,16 @@ export class CodeMSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		// missing：一键安装 + 手动命令提示
+		// missing：先尝试自动定位（常见安装位置扫描），命中即自动填入并复检
+		const found = probeCodemCli();
+		if (found && found !== expandPath(this.plugin.settings.codemCliPath)) {
+			this.plugin.settings.codemCliPath = toTildePath(found);
+			await this.plugin.saveSettings();
+			new Notice(`已自动定位 CodeM：${abbreviateHome(found)}`, 6000);
+			return this.refreshEnv(envSetting); // 复检（不会无限递归：定位成功后状态必然变化）
+		}
+
+		// 仍未找到：一键安装 + 手动命令提示
 		envSetting.setDesc('尚未检测到 CodeM。点击「安装 CodeM」自动完成安装（需联网，约 1-3 分钟）。');
 		envSetting.addButton((btn) =>
 			btn

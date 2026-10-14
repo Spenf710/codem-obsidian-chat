@@ -2,7 +2,7 @@ import { ItemView, Notice, WorkspaceLeaf, setIcon, TFile, TFolder } from 'obsidi
 import * as fs from 'fs';
 import * as path from 'path';
 import type CodeMChatPlugin from './main';
-import { AcpClient, runCodemHeadless, type AcpOptions } from './acp-client';
+import { AcpClient, runCodemHeadless, expandPath, type AcpOptions } from './acp-client';
 import { renderMarkdown } from './markdown';
 import {
 	listCodemSessions,
@@ -16,6 +16,8 @@ import { formatTime } from './pickers';
 import {
 	checkEnvironment,
 	installCodem,
+	probeCodemCli,
+	toTildePath,
 	friendlyError,
 	CODEM_INSTALL_CMD,
 } from './diagnostics';
@@ -385,7 +387,15 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 
-		// missing：引导安装（欢迎页内直接提供一键安装）
+		// missing：先尝试自动定位（常见安装位置扫描），命中即自动填入并重渲染
+		const found = probeCodemCli();
+		if (found && found !== expandPath(this.plugin.settings.codemCliPath)) {
+			this.plugin.settings.codemCliPath = toTildePath(found);
+			await this.plugin.saveSettings();
+			return this.renderEmptyContent(el); // 复检（定位成功后状态必然变化，不会无限递归）
+		}
+
+		// 仍未找到：引导安装（欢迎页内直接提供一键安装）
 		el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
 		el.createDiv({ cls: 'codem-chat-empty-title', text: '开始之前，先安装 CodeM' });
 		el.createDiv({

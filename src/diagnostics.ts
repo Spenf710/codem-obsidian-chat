@@ -32,6 +32,49 @@ export async function checkEnvironment(cliPath: string, nodePath?: string): Prom
 	return { state: 'ready', cliPath: exe, version: version ?? '未知版本' };
 }
 
+/**
+ * 自动定位 CodeM CLI：按常见安装位置探测（默认目录 → npm 全局 → PATH 扫描）。
+ * 命中返回绝对路径；调用方（设置页/欢迎页）在配置路径未命中时用它自动填入。
+ */
+export function probeCodemCli(): string | null {
+	const home = os.homedir();
+	const candidates = [
+		path.join(home, '.codem', 'bin', 'codem.cmd'),
+		path.join(home, '.codem', 'bin', 'codem.exe'),
+		path.join(
+			process.env.APPDATA ?? path.join(home, 'AppData', 'Roaming'),
+			'npm',
+			'codem.cmd'
+		),
+	];
+	for (const c of candidates) {
+		try {
+			if (fs.existsSync(c)) return c;
+		} catch {
+			/* 无权限忽略 */
+		}
+	}
+	// PATH 扫描（Obsidian 进程 PATH 可能残缺，尽力而为）
+	for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+		if (!dir) continue;
+		for (const name of ['codem.cmd', 'codem.exe']) {
+			const p = path.join(dir, name);
+			try {
+				if (fs.existsSync(p)) return p;
+			} catch {
+				/* 无权限段忽略 */
+			}
+		}
+	}
+	return null;
+}
+
+/** 绝对路径转 ~ 形式（home 下才转换），便于设置页展示与存储一致 */
+export function toTildePath(p: string): string {
+	const home = os.homedir();
+	return p.startsWith(home + path.sep) ? '~' + p.slice(home.length).split(path.sep).join('/') : p;
+}
+
 /** `codem --version`（cmd /c 包装 + PATH 兜底），失败返回 null */
 function runCodemVersion(exe: string, nodePath?: string): Promise<string | null> {
 	const env: NodeJS.ProcessEnv = { ...process.env };
