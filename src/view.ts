@@ -57,6 +57,8 @@ interface RenderState {
 	cards: Map<string, ToolCard>;
 	/** 早于 tool_call 通知到达的权限条暂存（toolCallId → 条目），卡片创建时回挂 */
 	pendingPerms: Map<string, HTMLElement[]>;
+	/** yolo 批准轮内聚合条（唯一，逐次更新计数，沉底不刷屏） */
+	yoloNote?: { el: HTMLElement; counts: Map<string, number>; total: number };
 }
 
 /** 待发送图片（粘贴直接进内存，base64 无 data: 前缀） */
@@ -82,6 +84,8 @@ interface ChatTab {
 	scrollEl: HTMLElement;
 	/** 最近一次收到 CodeM 更新的时间（无响应看门狗用） */
 	lastActivity: number;
+	/** 轮次序号：watchdog 强制收尾时 +1，使挂起的旧 prompt finally 失效，防止破坏新一轮 */
+	turnSeq: number;
 }
 
 /** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
@@ -555,6 +559,7 @@ export class CodeMChatView extends ItemView {
 			images: [],
 			scrollEl: null as unknown as HTMLElement,
 			lastActivity: 0,
+			turnSeq: 0,
 		};
 		tab.scrollEl = this.msgArea.createDiv({ cls: 'codem-chat-messages' });
 		tab.scrollEl.addEventListener('click', () => this.closeDir());
@@ -805,6 +810,7 @@ export class CodeMChatView extends ItemView {
 		const tab = this.activeTab;
 		if ((!rawPrompt && !tab.images.length) || tab.busy) return;
 
+		const seq = ++tab.turnSeq; // 本轮序号：watchdog 强制收尾后，迟到的旧 finally 自动失效
 		tab.busy = true;
 		this.setStatusLight('running');
 		this.inputEl.value = '';
@@ -825,6 +831,28 @@ export class CodeMChatView extends ItemView {
 					'已超过 5 分钟没有新响应。若一直停在这里，请检查网络后重试；也可能是 CodeM 刚自动更新导致，可向官方反馈。',
 					12000
 				);
+				return;
+			}
+			// 强制收尾：CLI 端 turn 可能已结束但最终 response 丢失，prompt 永久挂起、UI 卡"执行中"。
+			// turnSeq+1 使旧 send 的 finally 失效，由这里接管 UI 复位（cancel 只是 best effort，不保证救回）。
+			if (stallNotified && Date.now() - tab.lastActivity > 360000) {
+				window.clearInterval(watchdog);
+				tab.turnSeq++;
+				if (tab.sessionId) this.client?.cancelSession(tab.sessionId);
+				this.stopTypewriter(tab);
+				tab.current = null;
+				tab.busy = false;
+				tab.light = 'done';
+				tab.scrollEl
+					.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
+					.setText('⏱ 本轮长时间无响应，已自动结束显示；若 CodeM 仍在后台执行，结果可能稍后出现。');
+				this.renderTabs();
+				this.syncStopUi();
+				if (this.lightEl) {
+					this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
+					this.lightEl.addClass('is-' + (tab === this.activeTab ? 'done' : tab.light));
+				}
+				this.scrollBottom(tab.scrollEl);
 			}
 		}, 30000);
 
@@ -857,6 +885,8 @@ export class CodeMChatView extends ItemView {
 			const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: promptText }];
 			this.startTypewriter(st, tab);
 			const reason = await client.prompt(tab.sessionId, blocks);
+			// 本轮已被 watchdog 强制收尾接管：丢弃迟到结果，不再渲染时间线/标题
+			if (seq !== tab.turnSeq) return;
 			// 用户中途停止（session/cancel）：已流出正文保留，时间线打停止标记
 			if (reason === 'cancelled') {
 				this.stopTypewriter(tab);
@@ -891,11 +921,17 @@ export class CodeMChatView extends ItemView {
 			det.createEl('summary', { text: '查看详情' });
 			det.createDiv({ cls: 'codem-chat-error-raw', text: detail.slice(0, 2000) });
 		} finally {
+			// 本轮已被强制收尾接管（turnSeq 已推进）：跳过复位，防止破坏接管方状态
+			if (seq !== tab.turnSeq) {
+				window.clearInterval(watchdog);
+				return;
+			}
 			window.clearInterval(watchdog);
 			tab.current = null;
 			tab.busy = false;
 			tab.light = 'done';
 			this.renderTabs();
+			this.syncStopUi(); // 复位停止按钮与"执行中…"输入框提示（手动改灯绕过了 setStatusLight）
 			if (this.lightEl) {
 				this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
 				this.lightEl.addClass('is-' + (tab === this.activeTab ? 'done' : tab.light));
@@ -1163,11 +1199,13 @@ export class CodeMChatView extends ItemView {
 			}
 			card = { detailsEl: details, headEl, title, status };
 			st.cards.set(id, card);
-			// 回挂早到的权限条（request_permission 先于 tool_call 到达的场景）
+			// 回挂早到的权限条（request_permission 先于 tool_call 到达的场景）；
+			// 确保卡片展开，防权限条藏在折叠区内不可见
 			const pended = st.pendingPerms.get(id);
 			if (pended) {
 				for (const el of pended) card.detailsEl.appendChild(el);
 				st.pendingPerms.delete(id);
+				card.detailsEl.setAttribute('open', '');
 			}
 		} else {
 			const incomingTitle = update.title as string | undefined;
@@ -1215,6 +1253,9 @@ export class CodeMChatView extends ItemView {
 		const allow = options.find((o) => String(o.kind).startsWith('allow'));
 
 		if (!st) {
+			// 无活动渲染状态（本轮已结束/watchdog 收尾）：可见反馈而非静默取消，
+			// 否则用户不知道有审批请求被吞
+			new Notice(`CodeM：${label} 的权限请求到达时对话已结束，已自动取消`);
 			respond({ outcome: { outcome: 'cancelled' } });
 			return;
 		}
@@ -1230,6 +1271,10 @@ export class CodeMChatView extends ItemView {
 			if (host) {
 				host.appendChild(el);
 			} else if (toolCall?.toolCallId) {
+				// 卡片未创建：先落 aiBlock 末尾保证立即可见可点——agent 在等权限响应，
+				// 只存 pendingPerms 会让条目不可见、用户不响应则对话挂死；
+				// 卡片创建（handleToolEvent 回挂）时 appendChild 自动迁移进卡片
+				st.aiBlock.appendChild(el);
 				const list = st.pendingPerms.get(toolCall.toolCallId) ?? [];
 				list.push(el);
 				st.pendingPerms.set(toolCall.toolCallId, list);
@@ -1239,9 +1284,23 @@ export class CodeMChatView extends ItemView {
 		};
 		if (this.yolo && allow) {
 			respond({ outcome: { outcome: 'selected', optionId: allow.optionId } });
-			const note = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
-			note.setText(`🤖 yolo 自动批准：${label}`);
-			park(note);
+			// 轮内聚合为唯一沉底状态条：多次批准按工具名计数，避免逐条刷屏
+			const tool = toolCall?.title?.trim() || '工具';
+			let note = st.yoloNote;
+			if (!note) {
+				const el = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
+				st.aiBlock.appendChild(el);
+				note = { el, counts: new Map(), total: 0 };
+				st.yoloNote = note;
+			}
+			note.counts.set(tool, (note.counts.get(tool) ?? 0) + 1);
+			note.total++;
+			if (note.total === 1) {
+				note.el.setText(`🤖 yolo 自动批准：${tool}`);
+			} else {
+				const parts = [...note.counts.entries()].map(([t, n]) => `${t} ×${n}`);
+				note.el.setText(`🤖 yolo 自动批准 ${note.total} 次：${parts.join(' · ')}`);
+			}
 			this.scrollBottom(tab.scrollEl);
 			return;
 		}
@@ -1487,6 +1546,14 @@ export class CodeMChatView extends ItemView {
 			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src}${turnTxt}` });
 			row.createSpan({ cls: 'codem-suggest-desc', text: this.sessionTitle(c) });
 			row.addEventListener('mousedown', (e) => e.preventDefault());
+			// 鼠标悬停即同步选中（灰框跟随鼠标）；只切 class 不重建列表，避免悬停元素被替换
+			row.addEventListener('mouseenter', () => {
+				if (this.histIndex === i) return;
+				this.histIndex = i;
+				this.histEl?.querySelectorAll('.codem-suggest-item.is-active').forEach((el) => el.removeClass('is-active'));
+				row.addClass('is-active');
+				row.scrollIntoView({ block: 'nearest' });
+			});
 			row.addEventListener('click', () => {
 				this.closeHistory();
 				void this.loadHistory(c);
@@ -1565,9 +1632,11 @@ export class CodeMChatView extends ItemView {
 					(this.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
 			);
 			this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
-			this.setStatusLight('idle');
 		} finally {
 			this.busy = false;
+			// busy 复位后再同步状态灯/输入框提示：setStatusLight 内部的 syncStopUi 读 busy，
+			// 放在 try 内会让 placeholder 写成"执行中"后不再刷新（打开历史会话后输入框卡"执行中"）
+			this.setStatusLight('idle');
 		}
 	}
 
