@@ -272,6 +272,21 @@ export class AcpClient {
 		await this.request('session/close', { sessionId });
 	}
 
+	/**
+	 * 取消该会话进行中的一轮对话（session/cancel 通知，ACP 标准方法）。
+	 * 探针实测 CodeM 0.1.229：发出后挂起的 prompt 立即 resolve {stopReason:'cancelled'}，
+	 * 其他会话不受影响。通知无 id 无响应，不走 request。
+	 */
+	cancelSession(sessionId: string): void {
+		try {
+			this.child?.stdin?.write(
+				JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId } }) + '\n'
+			);
+		} catch {
+			// 进程已死：挂起的 prompt 由 failPending 统一报错
+		}
+	}
+
 	stop(): void {
 		const pid = this.child?.pid;
 		this.child = null;

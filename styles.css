@@ -435,6 +435,32 @@
 	border-color: transparent;
 }
 
+/* —— 停止按钮（仅执行中显示，与 Esc 等效）—— */
+
+.codem-chat-stop {
+	font-size: var(--font-ui-smaller);
+	padding: 1px 10px;
+	background: transparent;
+	border: 1px solid var(--text-error);
+	border-radius: 999px;
+	cursor: pointer;
+	color: var(--text-error);
+}
+
+.codem-chat-stop:hover {
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+	border-color: transparent;
+}
+
+/* —— 中途停止标记（时间线内小字）—— */
+
+.codem-chat-stopped {
+	margin: 6px 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
 /* 高亮闪一下：导航定位时 */
 .codem-chat-flash {
 	animation: codem-flash 1.2s ease-out;

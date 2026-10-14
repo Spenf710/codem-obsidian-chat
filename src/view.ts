@@ -104,6 +104,7 @@ export class CodeMChatView extends ItemView {
 	private client: AcpClient | null = null;
 	private inputEl!: HTMLTextAreaElement;
 	private yoloBtn!: HTMLButtonElement;
+	private stopBtn!: HTMLButtonElement;
 	private yolo = false;
 
 	// 多会话 tab（视图内并行，参考 Claudian 数字 tab）
@@ -265,6 +266,11 @@ export class CodeMChatView extends ItemView {
 		this.yoloBtn = actions.createEl('button', { text: '🤖 YOLO', cls: 'codem-chat-yolo' });
 		this.yoloBtn.setAttribute('aria-label', 'yolo 模式：自动批准工具权限请求');
 		this.yoloBtn.onclick = () => this.toggleYolo();
+		// 停止按钮：仅执行中显示（同步见 setStatusLight → syncStopButton），与 ESC 等效
+		this.stopBtn = actions.createEl('button', { text: '⏹ 停止', cls: 'codem-chat-stop' });
+		this.stopBtn.setAttribute('aria-label', '停止当前任务（Esc）');
+		this.stopBtn.hide();
+		this.stopBtn.onclick = () => this.stopActiveTurn();
 
 		this.bindInputEvents();
 		this.bindPaste();
@@ -272,6 +278,20 @@ export class CodeMChatView extends ItemView {
 	}
 
 	private bindInputEvents(): void {
+		// ESC 中途停止：capture 绑在视图根上，焦点在消息区/按钮时也能响应；
+		// 浮层（候选/历史）开启时让位给输入框 handler 的关浮层逻辑
+		this.containerEl.addEventListener(
+			'keydown',
+			(e) => {
+				if (e.key !== 'Escape' || e.isComposing || !this.activeTab.busy) return;
+				const suggestActive = this.suggestPrefix !== null && this.suggestItems.length > 0;
+				const histActive = this.histOpen && this.histItems.length > 0;
+				if (suggestActive || histActive) return;
+				e.preventDefault();
+				this.stopActiveTurn();
+			},
+			true
+		);
 		this.inputEl.addEventListener('keydown', (e) => {
 			const suggestActive = this.suggestPrefix !== null && this.suggestItems.length > 0;
 			const histActive = this.histOpen && this.histItems.length > 0;
@@ -656,6 +676,28 @@ export class CodeMChatView extends ItemView {
 			this.lightEl.addClass('is-' + state);
 		}
 		this.renderTabs();
+		this.syncStopUi();
+	}
+
+	/** 停止按钮与输入框提示跟随当前 tab 执行状态（setStatusLight 是所有状态切换汇聚点） */
+	private syncStopUi(): void {
+		if (!this.stopBtn) return;
+		this.stopBtn.toggle(this.activeTab.busy);
+		this.inputEl.placeholder = this.activeTab.busy
+			? '执行中…按 Esc 或点击「⏹ 停止」可中途停止'
+			: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）';
+	}
+
+	/** 中途停止当前 tab 正在执行的一轮（ESC / ⏹ 按钮），已流出的正文保留 */
+	private lastStopAt = 0;
+	private stopActiveTurn(): void {
+		const tab = this.activeTab;
+		if (!tab.busy) return;
+		if (Date.now() - this.lastStopAt < 800) return; // 连按防抖：cancel 重复发无害，提示会闪
+		this.lastStopAt = Date.now();
+		// client 尚未建好时 prompt 还没发出，挂起的流程会随启动失败自然收尾
+		if (this.client && tab.sessionId) this.client.cancelSession(tab.sessionId);
+		new Notice('已发送停止指令…', 2500);
 	}
 
 	// ===== 图片粘贴（CodeM 识图） =====
@@ -814,8 +856,15 @@ export class CodeMChatView extends ItemView {
 			});
 			const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: promptText }];
 			this.startTypewriter(st, tab);
-			await client.prompt(tab.sessionId, blocks);
-			this.finishTurn(st, tab);
+			const reason = await client.prompt(tab.sessionId, blocks);
+			// 用户中途停止（session/cancel）：已流出正文保留，时间线打停止标记
+			if (reason === 'cancelled') {
+				this.stopTypewriter(tab);
+				tab.scrollEl
+					.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
+					.setText('⏹ 已停止（本轮内容可能不完整）');
+			}
+			this.finishTurn(st, tab, reason === 'cancelled');
 			// 首轮结束后台生成会话标题（无头 -p 调用，静默失败）
 			if (tab.turnCount === 1 && tab.sessionId && !this.plugin.settings.sessionTitles[tab.sessionId]) {
 				void this.generateTitle(tab, rawPrompt);
@@ -855,8 +904,8 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	/** 一轮完成收尾：停打字机、收束正文段、折叠思考区 */
-	private finishTurn(st: RenderState, tab: ChatTab): void {
+	/** 一轮完成收尾：停打字机、收束正文段、折叠思考区（stopped=用户中途停止） */
+	private finishTurn(st: RenderState, tab: ChatTab, stopped = false): void {
 		if (tab.typeTimer !== null) {
 			window.clearInterval(tab.typeTimer);
 			tab.typeTimer = null;
@@ -868,10 +917,13 @@ export class CodeMChatView extends ItemView {
 		} else {
 			st.thinking.hide();
 		}
-		// 兜底：轮结束仍无对应卡片的权限条（plan 批准等无 tool_call 的请求）落回正文末尾，不丢信息
+		// 兜底：轮结束仍无对应卡片的权限条（plan 批准等无 tool_call 的请求）落回正文末尾，不丢信息；
+		// 停止的轮次权限请求已随轮作废，直接清掉（按钮点击也不会再有响应）
 		if (st.pendingPerms.size) {
-			for (const list of st.pendingPerms.values()) {
-				for (const el of list) st.aiBlock.appendChild(el);
+			if (!stopped) {
+				for (const list of st.pendingPerms.values()) {
+					for (const el of list) st.aiBlock.appendChild(el);
+				}
 			}
 			st.pendingPerms.clear();
 		}
