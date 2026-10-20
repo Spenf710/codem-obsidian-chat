@@ -787,19 +787,6 @@ body.theme-light .codem-chat-root {
 	opacity: 1;
 }
 
-/* Pin 图标（tab 内），根据 is-active 控制显隐与透明度 */
-.codem-chat-pin-icon {
-	opacity: 0.55;
-	cursor: pointer;
-	font-size: 0.85em;
-	user-select: none;
-	margin-left: 1px;
-}
-.codem-chat-pin-icon:hover,
-.codem-chat-pin-icon.is-active {
-	opacity: 1;
-}
-
 /* 粘贴图片预览 chips */
 .codem-chat-previews {
 	display: flex;

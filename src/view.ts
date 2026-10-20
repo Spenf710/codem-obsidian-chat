@@ -99,8 +99,6 @@ interface ChatTab {
 	lastActivity: number;
 	/** 轮次序号：watchdog 强制收尾时 +1，使挂起的旧 prompt finally 失效，防止破坏新一轮 */
 	turnSeq: number;
-	/** 该会话是否被 Pin 住（不可关闭、历史列表前置） */
-	pinned: boolean;
 }
 
 /** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
@@ -612,7 +610,6 @@ export class CodeMChatView extends ItemView {
 			scrollEl: null as unknown as HTMLElement,
 			lastActivity: 0,
 			turnSeq: 0,
-			pinned: false,
 		};
 		tab.scrollEl = this.msgArea.createDiv({ cls: 'codem-chat-messages' });
 		tab.scrollEl.addEventListener('click', () => this.closeDir());
@@ -629,25 +626,6 @@ export class CodeMChatView extends ItemView {
 			const dot = b.createSpan({ cls: 'codem-chat-light' });
 			dot.addClass('is-' + tab.light);
 			b.createSpan({ text: String(i + 1) });
-			// Pin 标记（已钉住的 tab 在编号前显示图钉图标，悬停可取消）
-			if (tab.pinned) {
-				const pinIcon = b.createSpan({ cls: 'codem-chat-pin-icon is-active', text: '📌' });
-				pinIcon.setAttribute('aria-label', '取消钉住');
-				pinIcon.onclick = (e) => {
-					e.stopPropagation();
-					tab.pinned = false;
-					this.renderTabs();
-				};
-			} else {
-				// 未钉住：悬停时在关闭按钮旁出现可点击的 Pin 图标
-				const pinIcon = b.createSpan({ cls: 'codem-chat-pin-icon', text: '📌' });
-				pinIcon.setAttribute('aria-label', '钉住此会话');
-				pinIcon.onclick = (e) => {
-					e.stopPropagation();
-					tab.pinned = true;
-					this.renderTabs();
-				};
-			}
 			b.setAttribute('aria-label', `会话 ${i + 1}`);
 			b.onclick = () => this.switchTab(tab);
 			if (this.tabs.length > 1) {
@@ -682,10 +660,6 @@ export class CodeMChatView extends ItemView {
 			new Notice('该会话执行中，等本轮结束再关');
 			return;
 		}
-		if (tab.pinned) {
-			new Notice('该会话已钉住，请先取消钉住（点击 📌）后再关闭');
-			return;
-		}
 		this.releaseSession(tab);
 		const idx = this.tabs.indexOf(tab);
 		if (idx < 0) return;
@@ -704,13 +678,9 @@ export class CodeMChatView extends ItemView {
 		this.renderTabs();
 	}
 
-	/** 重置当前 tab 为空会话（不占 tab 槽位；已 Pin 住的会话不能重置） */
+	/** 重置当前 tab 为空会话（不占 tab 槽位） */
 	private resetActiveTab(): void {
 		const tab = this.activeTab;
-		if (tab.pinned) {
-			new Notice('该会话已钉住，请先取消钉住（点击 📌）后再重置');
-			return;
-		}
 		this.releaseSession(tab);
 		tab.pendingContext = null;
 		tab.mdBuffer = '';
@@ -735,7 +705,7 @@ export class CodeMChatView extends ItemView {
 		const tab = this.activeTab;
 		// 当前 tab 还没开始过对话（且非执行中）→ 就地重置，不占 tab 额度；
 		// busy 时跳过重置直接新开 tab：多会话并行，执行中的会话继续跑
-		if (!tab.busy && !tab.sessionId && tab.turnCount === 0 && !tab.pendingContext && !tab.pinned) {
+		if (!tab.busy && !tab.sessionId && tab.turnCount === 0 && !tab.pendingContext) {
 			this.resetActiveTab();
 			return;
 		}
