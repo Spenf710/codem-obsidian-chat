@@ -1091,7 +1091,14 @@ export class CodeMChatView extends ItemView {
 	}
 
 	private renderUserMessage(text: string, images: PendingImage[]): HTMLElement {
-		const userBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-user' });
+		// 行容器：气泡 + 气泡外侧的时间戳（时间戳不放进深色气泡内，避免看不清）
+		const row = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-user-row' });
+		// 消息时间戳（HH:MM）：气泡左上角外侧——DOM 排在气泡前（flex 左→右），垂直顶部对齐
+		const now = new Date();
+		const hh = String(now.getHours()).padStart(2, '0');
+		const mm = String(now.getMinutes()).padStart(2, '0');
+		row.createSpan({ cls: 'codem-chat-time', text: `${hh}:${mm}` });
+		const userBlock = row.createDiv({ cls: 'codem-chat-user' });
 		if (text) {
 			const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
 			body.appendChild(renderMarkdown(text));
@@ -1100,12 +1107,7 @@ export class CodeMChatView extends ItemView {
 		for (const img of images) {
 			userBlock.createEl('img', { cls: 'codem-chat-img', attr: { src: `data:${img.mime};base64,${img.data}` } });
 		}
-		// 消息时间戳（HH:MM，Claudian 式淡灰小字）
-	const now = new Date();
-	 const hh = String(now.getHours()).padStart(2, '0');
-	 const mm = String(now.getMinutes()).padStart(2, '0');
-	 userBlock.createSpan({ cls: 'codem-chat-time', text: `${hh}:${mm}` });
-	 return userBlock;
+		return row;
 	}
 
 	/**
