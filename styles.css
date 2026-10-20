@@ -135,15 +135,18 @@ body.theme-light .codem-chat-root {
 }
 
 /* 用户消息：Claudian 暗气泡——半透明黑底 + 尾角收小 + 右对齐（替换原左竖线引用条形态） */
-/* 用户消息行：气泡靠右 + 气泡外右侧时间戳（时间不进深色气泡内） */
+/* 用户消息行：时间戳在气泡上方左对齐，气泡在下方靠右（时间不进深色气泡内） */
 .codem-chat-user-row {
 	display: flex;
+	flex-direction: column;
 	align-items: flex-start;
-	justify-content: flex-end;
-	gap: 6px;
+	gap: 3px;
+	align-self: stretch;
+	width: 100%;
 }
 
 .codem-chat-user {
+	align-self: flex-end;
 	max-width: 90%;
 	padding: 10px 14px;
 	background: #0000004d;
@@ -988,7 +991,7 @@ body.theme-light .codem-chat-root {
 	color: var(--text-faint);
 	user-select: none;
 	white-space: nowrap;
-	padding-top: 4px;
+	padding: 0 2px;
 }
 
 /* —— 表格定制（Claudian 式紧凑表格）—— */
