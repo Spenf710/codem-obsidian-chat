@@ -787,6 +787,19 @@ body.theme-light .codem-chat-root {
 	opacity: 1;
 }
 
+/* Pin 图标（tab 内），根据 is-active 控制显隐与透明度 */
+.codem-chat-pin-icon {
+	opacity: 0.55;
+	cursor: pointer;
+	font-size: 0.85em;
+	user-select: none;
+	margin-left: 1px;
+}
+.codem-chat-pin-icon:hover,
+.codem-chat-pin-icon.is-active {
+	opacity: 1;
+}
+
 /* 粘贴图片预览 chips */
 .codem-chat-previews {
 	display: flex;
@@ -893,6 +906,67 @@ body.theme-light .codem-chat-root {
 .codem-chat-image-modal img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
 .codem-chat-image-modal-close { position: absolute; top: -14px; right: -14px; width: 28px; height: 28px; border-radius: 50%; background: var(--background-primary); border: 1px solid var(--background-modifier-border); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; }
 
+/* —— Citation 笔记引用块（Claudian 式可折叠折叠区）—— */
+
+.codem-chat-citations {
+	margin: 8px 0;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+.codem-chat-citations-header {
+	cursor: pointer;
+	user-select: none;
+	font-weight: 500;
+	color: var(--text-accent);
+}
+.codem-chat-citations-header:hover {
+	opacity: 0.85;
+}
+.codem-chat-citations-content {
+	margin: 4px 0 0 7px;
+	padding: 4px 0 4px 16px;
+	border-inline-start: 2px solid var(--background-modifier-border);
+}
+.codem-chat-citation-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 0;
+}
+.codem-chat-citation-icon {
+	flex-shrink: 0;
+}
+
+/* —— 文本块 hover 复制按钮 —— */
+
+.codem-chat-text {
+	position: relative;
+}
+.codem-chat-copy-btn {
+	appearance: none;
+	position: absolute;
+	bottom: 0;
+	right: 0;
+	padding: 1px 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--codem-radius-s);
+	background: var(--background-primary);
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	font-size: 11px;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity var(--codem-transition);
+	z-index: 2;
+}
+.codem-chat-text:hover .codem-chat-copy-btn {
+	opacity: 1;
+}
+.codem-chat-copy-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
 /* 动效无障碍：系统减动效偏好时停思考呼吸与状态旋转 */
 @media (prefers-reduced-motion: reduce) {
 	.codem-chat-thinking:not(.is-done) summary,
@@ -910,4 +984,65 @@ body.theme-light .codem-chat-root {
 	background: var(--background-secondary);
 	border-radius: var(--codem-radius-s);
 	border-left: 3px solid var(--codem-brand);
+}
+
+/* —— 消息时间戳（用户气泡内淡灰小字）—— */
+
+.codem-chat-time {
+	display: block;
+	margin-top: 2px;
+	font-size: 10px;
+	color: var(--text-faint);
+	user-select: none;
+}
+
+/* —— 表格定制（Claudian 式紧凑表格）—— */
+
+.codem-chat .markdown-rendered table {
+	border-collapse: collapse;
+	width: 100%;
+	margin: 8px 0;
+	font-size: var(--font-ui-smaller);
+}
+.codem-chat .markdown-rendered th,
+.codem-chat .markdown-rendered td {
+	padding: 4px 10px;
+	border: 1px solid var(--background-modifier-border);
+	text-align: left;
+}
+.codem-chat .markdown-rendered th {
+	background: var(--background-secondary);
+	font-weight: 600;
+}
+.codem-chat .markdown-rendered tr:hover td {
+	background: var(--background-modifier-hover);
+}
+
+/* —— 6px 细滚动条 —— */
+
+.codem-chat ::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+.codem-chat ::-webkit-scrollbar-thumb {
+	background: var(--background-modifier-border);
+	border-radius: 3px;
+}
+.codem-chat ::-webkit-scrollbar-thumb:hover {
+	background: var(--text-faint);
+}
+.codem-chat ::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+/* —— focus-visible 键盘可达性 —— */
+
+.codem-chat button:focus-visible,
+.codem-chat a:focus-visible,
+.codem-chat input:focus-visible,
+.codem-chat textarea:focus-visible,
+.codem-chat summary:focus-visible {
+	outline: 2px solid var(--codem-brand);
+	outline-offset: 1px;
+	border-radius: var(--codem-radius-s);
 }

@@ -99,6 +99,8 @@ interface ChatTab {
 	lastActivity: number;
 	/** 轮次序号：watchdog 强制收尾时 +1，使挂起的旧 prompt finally 失效，防止破坏新一轮 */
 	turnSeq: number;
+	/** 该会话是否被 Pin 住（不可关闭、历史列表前置） */
+	pinned: boolean;
 }
 
 /** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
@@ -181,7 +183,11 @@ export class CodeMChatView extends ItemView {
 	private suggestDirPath = '';
 	private lightEl: HTMLElement | null = null;
 
-	// ===== 会话状态代理（getter/setter 指向 activeTab，既有逻辑零改动） =====
+	/** 排队发送的条目（Agent 执行中用户提交的消息不会被丢弃） */
+	private inputQueue: { prompt: string; images: PendingImage[] }[] = [];
+
+	/** 本会话记住的权限授权：工具名 → 已批准的 kind 集合（插件生命周期内有效，重启清空） */
+	private rememberedPerms = new Map<string, Set<string>>();
 
 	private get sessionId(): string | null {
 		return this.activeTab.sessionId;
@@ -429,8 +435,9 @@ export class CodeMChatView extends ItemView {
 		el.empty();
 
 		if (status.state === 'ready') {
+			const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()];
 			el.createDiv({ cls: 'codem-chat-empty-icon', text: '✳' });
-			el.createDiv({ cls: 'codem-chat-empty-title', text: 'CodeM 已就绪' });
+			 el.createDiv({ cls: 'codem-chat-empty-title', text: `${wd}好，CodeM 已就绪` });
 			el.createDiv({
 				cls: 'codem-chat-empty-sub',
 				text: '你的笔记库就是 CodeM 的工作目录，直接开始提问吧。',
@@ -605,6 +612,7 @@ export class CodeMChatView extends ItemView {
 			scrollEl: null as unknown as HTMLElement,
 			lastActivity: 0,
 			turnSeq: 0,
+			pinned: false,
 		};
 		tab.scrollEl = this.msgArea.createDiv({ cls: 'codem-chat-messages' });
 		tab.scrollEl.addEventListener('click', () => this.closeDir());
@@ -621,6 +629,25 @@ export class CodeMChatView extends ItemView {
 			const dot = b.createSpan({ cls: 'codem-chat-light' });
 			dot.addClass('is-' + tab.light);
 			b.createSpan({ text: String(i + 1) });
+			// Pin 标记（已钉住的 tab 在编号前显示图钉图标，悬停可取消）
+			if (tab.pinned) {
+				const pinIcon = b.createSpan({ cls: 'codem-chat-pin-icon is-active', text: '📌' });
+				pinIcon.setAttribute('aria-label', '取消钉住');
+				pinIcon.onclick = (e) => {
+					e.stopPropagation();
+					tab.pinned = false;
+					this.renderTabs();
+				};
+			} else {
+				// 未钉住：悬停时在关闭按钮旁出现可点击的 Pin 图标
+				const pinIcon = b.createSpan({ cls: 'codem-chat-pin-icon', text: '📌' });
+				pinIcon.setAttribute('aria-label', '钉住此会话');
+				pinIcon.onclick = (e) => {
+					e.stopPropagation();
+					tab.pinned = true;
+					this.renderTabs();
+				};
+			}
 			b.setAttribute('aria-label', `会话 ${i + 1}`);
 			b.onclick = () => this.switchTab(tab);
 			if (this.tabs.length > 1) {
@@ -655,6 +682,10 @@ export class CodeMChatView extends ItemView {
 			new Notice('该会话执行中，等本轮结束再关');
 			return;
 		}
+		if (tab.pinned) {
+			new Notice('该会话已钉住，请先取消钉住（点击 📌）后再关闭');
+			return;
+		}
 		this.releaseSession(tab);
 		const idx = this.tabs.indexOf(tab);
 		if (idx < 0) return;
@@ -673,9 +704,13 @@ export class CodeMChatView extends ItemView {
 		this.renderTabs();
 	}
 
-	/** 重置当前 tab 为空会话（不占 tab 槽位） */
+	/** 重置当前 tab 为空会话（不占 tab 槽位；已 Pin 住的会话不能重置） */
 	private resetActiveTab(): void {
 		const tab = this.activeTab;
+		if (tab.pinned) {
+			new Notice('该会话已钉住，请先取消钉住（点击 📌）后再重置');
+			return;
+		}
 		this.releaseSession(tab);
 		tab.pendingContext = null;
 		tab.mdBuffer = '';
@@ -700,7 +735,7 @@ export class CodeMChatView extends ItemView {
 		const tab = this.activeTab;
 		// 当前 tab 还没开始过对话（且非执行中）→ 就地重置，不占 tab 额度；
 		// busy 时跳过重置直接新开 tab：多会话并行，执行中的会话继续跑
-		if (!tab.busy && !tab.sessionId && tab.turnCount === 0 && !tab.pendingContext) {
+		if (!tab.busy && !tab.sessionId && tab.turnCount === 0 && !tab.pendingContext && !tab.pinned) {
 			this.resetActiveTab();
 			return;
 		}
@@ -860,7 +895,18 @@ export class CodeMChatView extends ItemView {
 	private async send(): Promise<void> {
 		const rawPrompt = this.inputEl.value.trim();
 		const tab = this.activeTab;
-		if ((!rawPrompt && !tab.images.length) || tab.busy) return;
+		if ((!rawPrompt && !tab.images.length)) return;
+
+		// Agent 执行中：入队等待而非拒绝输入
+		if (tab.busy) {
+			this.inputQueue.push({ prompt: rawPrompt, images: tab.images.slice() });
+			tab.images = [];
+			this.inputEl.value = '';
+			tab.draft = '';
+			this.renderPreviews();
+			new Notice(`已排队（当前第 ${this.inputQueue.length} 条），稍后自动发送`);
+			return;
+		}
 
 		const seq = ++tab.turnSeq; // 本轮序号：watchdog 强制收尾后，迟到的旧 finally 自动失效
 		tab.busy = true;
@@ -990,6 +1036,17 @@ export class CodeMChatView extends ItemView {
 				this.lightEl.addClass('is-' + (tab === this.activeTab ? 'done' : tab.light));
 			}
 			this.scrollBottom(tab.scrollEl);
+			// 消费排队中的下一条消息
+			if (this.inputQueue.length > 0) {
+				const next = this.inputQueue.shift()!;
+				// 如果当前不在发起排队的 tab 上，切回去再发
+				if (this.activeTab !== tab) this.switchTab(tab);
+				tab.images = next.images;
+				this.inputEl.value = next.prompt;
+				tab.draft = next.prompt;
+				this.renderPreviews();
+				window.setTimeout(() => void this.send(), 200);
+			}
 		}
 	}
 
@@ -1030,6 +1087,8 @@ export class CodeMChatView extends ItemView {
 			const parts = [`⏱ 耗时 ${secs} 秒`];
 			if (st.toolCount > 0) parts.push(`🔧 ${st.toolCount} 次工具`);
 			st.aiBlock.createDiv({ cls: 'codem-chat-usage', text: parts.join(' · ') });
+			// 助手回复末尾扫描 [[引用]] → 渲染可折叠笔记引用块
+			this.appendCitations(st.aiBlock);
 		}
 	}
 
@@ -1071,7 +1130,12 @@ export class CodeMChatView extends ItemView {
 		for (const img of images) {
 			userBlock.createEl('img', { cls: 'codem-chat-img', attr: { src: `data:${img.mime};base64,${img.data}` } });
 		}
-		return userBlock;
+		// 消息时间戳（HH:MM，Claudian 式淡灰小字）
+	const now = new Date();
+	 const hh = String(now.getHours()).padStart(2, '0');
+	 const mm = String(now.getMinutes()).padStart(2, '0');
+	 userBlock.createSpan({ cls: 'codem-chat-time', text: `${hh}:${mm}` });
+	 return userBlock;
 	}
 
 	/**
@@ -1090,7 +1154,41 @@ export class CodeMChatView extends ItemView {
 		return s;
 	}
 
-	/** 文本节点中的 [[笔记|显示名]] → 可点击内部链接（Obsidian 主题样式） */
+	/** 扫描助手回复全部正文段中的 [[引用]] 并追加到消息底部：可折叠展开笔记引用块，点击链到原笔记 */
+	private appendCitations(aiBlock: HTMLElement): void {
+		const allText = Array.from(aiBlock.querySelectorAll('.codem-chat-text.markdown-rendered'))
+			.map((el) => el.textContent ?? '')
+			.join('\n');
+		const seen = new Set<string>();
+		const refs: string[] = [];
+		for (const m of allText.matchAll(/\[\[([^\][|]+)(?:\|[^\]]*)?\]\]/g)) {
+			const ref = m[1].trim();
+			if (ref && !seen.has(ref)) {
+				seen.add(ref);
+				refs.push(ref);
+			}
+		}
+		if (!refs.length) return;
+		const d = aiBlock.createEl('details', { cls: 'codem-chat-citations' });
+		d.createEl('summary', { cls: 'codem-chat-citations-header',
+			text: `📖 引用笔记 ${refs.length} 篇` });
+		const content = d.createDiv({ cls: 'codem-chat-citations-content' });
+		for (const ref of refs) {
+			const dest = this.app.metadataCache.getFirstLinkpathDest(ref, '');
+			const row = content.createDiv({ cls: 'codem-chat-citation-item' });
+			row.createSpan({ cls: 'codem-chat-citation-icon', text: '📄' });
+			const a = row.createEl('a', { cls: 'internal-link', text: ref });
+			a.onclick = (e) => {
+				e.preventDefault();
+				if (dest) void this.app.workspace.openLinkText(dest.path, '');
+				else new Notice(`未找到引用目标：${ref}`);
+			};
+		}
+	}
+
+	/** 文本节点中的 [[笔记|显示名]] → 可点击内部链接（Obsidian 主题样式）。
+	 *  用户消息保留跳转行为；助手回复的引用块由 finishTurn 统一渲染，
+	 *  不在流式阶段逐个 linkify（避免每个 delta 重扫 DOM 开销过大）。 */
 	private linkifyWikilinks(root: HTMLElement): void {
 		const re = /\[\[([^\][|]+)(?:\|([^\]]*))?\]\]/g;
 		const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -1328,7 +1426,7 @@ export class CodeMChatView extends ItemView {
 		this.scrollBottom(scrollEl);
 	}
 
-	/** 收束当前流式正文段：全文渲染定格，打字机不再写它 */
+	/** 收束当前流式正文段：全文渲染定格，打字机不再写它；追加 hover 复制按钮 */
 	private flushSeg(st: RenderState): void {
 		const seg = st.curSeg;
 		if (!seg) return;
@@ -1336,6 +1434,17 @@ export class CodeMChatView extends ItemView {
 		seg.done = true;
 		seg.el.empty();
 		seg.el.appendChild(renderMarkdown(seg.buf));
+		// hover 复制按钮（Claudian 式：浮在文本段右下角，hover 才出现）
+		const copyBtn = seg.el.createEl('button', { cls: 'codem-chat-copy-btn' });
+		copyBtn.setAttribute('aria-label', '复制此段');
+		copyBtn.setText('📋 复制');
+		copyBtn.onclick = (e) => {
+			e.stopPropagation();
+			void navigator.clipboard.writeText(seg.buf).then(() => {
+				copyBtn.setText('✅ 已复制');
+				window.setTimeout(() => copyBtn.setText('📋 复制'), 1500);
+			});
+		};
 	}
 
 	/** 行级 diff 渲染：insert 绿 / delete 红 / context 灰 + 行号，DOM API（textContent）防注入 */
@@ -1420,9 +1529,12 @@ export class CodeMChatView extends ItemView {
 			this.activeTab;
 		const st = tab.current;
 		const toolCall = params.toolCall as { toolCallId?: string; title?: string } | undefined;
-		const label = toolCall?.title ?? '工具请求权限';
+		const toolName = toolCall?.title ?? '工具';
+		const label = toolName + '请求权限';
 		const options = (params.options as Array<{ optionId: string; name: string; kind?: string }>) ?? [];
-		const allow = options.find((o) => String(o.kind).startsWith('allow'));
+		const allowOnce = options.find((o) => String(o.kind) === 'allow_once');
+		const allowAlways = options.find((o) => String(o.kind) === 'allow_always');
+		const reject = options.find((o) => String(o.kind) === 'reject_once');
 
 		if (!st) {
 			// 无活动渲染状态（本轮已结束/watchdog 收尾）：可见反馈而非静默取消，
@@ -1454,10 +1566,21 @@ export class CodeMChatView extends ItemView {
 				st.aiBlock.appendChild(el);
 			}
 		};
-		if (this.yolo && allow) {
-			respond({ outcome: { outcome: 'selected', optionId: allow.optionId } });
+
+		// 本会话记住授权 Map（插件生命周期内，重启 Obsidian 清空）
+		if (!this.rememberedPerms) this.rememberedPerms = new Map<string, Set<string>>();
+		if (allowAlways && this.rememberedPerms.get(toolName)?.has('allow_always')) {
+			respond({ outcome: { outcome: 'selected', optionId: allowAlways.optionId } });
+			const el = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
+			el.setText(`🔓 本会话已记住：${toolName} 自动批准`);
+			st.aiBlock.appendChild(el);
+			this.scrollBottom(tab.scrollEl);
+			return;
+		}
+
+		if (this.yolo && allowOnce) {
+			respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
 			// 轮内聚合为唯一沉底状态条：多次批准按工具名计数，避免逐条刷屏
-			const tool = toolCall?.title?.trim() || '工具';
 			let note = st.yoloNote;
 			if (!note) {
 				const el = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
@@ -1465,10 +1588,10 @@ export class CodeMChatView extends ItemView {
 				note = { el, counts: new Map(), total: 0 };
 				st.yoloNote = note;
 			}
-			note.counts.set(tool, (note.counts.get(tool) ?? 0) + 1);
+			note.counts.set(toolName, (note.counts.get(toolName) ?? 0) + 1);
 			note.total++;
 			if (note.total === 1) {
-				note.el.setText(`🤖 yolo 自动批准：${tool}`);
+				note.el.setText(`🤖 yolo 自动批准：${toolName}`);
 			} else {
 				const parts = [...note.counts.entries()].map(([t, n]) => `${t} ×${n}`);
 				note.el.setText(`🤖 yolo 自动批准 ${note.total} 次：${parts.join(' · ')}`);
@@ -1477,23 +1600,34 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 		const bar = createEl('div', { cls: 'codem-chat-perm' });
-		bar.createSpan({ text: `🔒 ${label}` });
-		for (const opt of options) {
-			bar.createEl('button', { text: opt.name }).onclick = () => {
-				bar.remove();
-				// 防僵尸复活：bar.remove() 只摘 DOM，Map 条目残留会导致轮末兑底/回挂时
-				// 把已点击的条再加回来（实测：任务正常结束后堆出一排已响应对的权限条）。
-				// 已响应的条立即从暂存区摘除，并打 dataset 标记双保险
+		bar.createSpan({ text: `🔒 ${toolName}` });
+		// 权限三档：Allow once / Allow for this session / Reject（自然语义，排开三个醒目按钮）
+		if (allowOnce) {
+			bar.createEl('button', { text: 'Allow once' }).onclick = () => {
 				bar.dataset.answered = '1';
-				if (toolCall?.toolCallId) {
-					const list = st.pendingPerms.get(toolCall.toolCallId);
-					if (list) {
-						const idx = list.indexOf(bar);
-						if (idx >= 0) list.splice(idx, 1);
-						if (!list.length) st.pendingPerms.delete(toolCall.toolCallId);
-					}
-				}
-				respond({ outcome: { outcome: 'selected', optionId: opt.optionId } });
+				this.prunePending(st, toolCall?.toolCallId, bar);
+				respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
+				bar.remove();
+			};
+		}
+		if (allowAlways) {
+			bar.createEl('button', { text: 'Allow for this session' }).onclick = () => {
+				bar.dataset.answered = '1';
+				if (!this.rememberedPerms) this.rememberedPerms = new Map();
+				const s = this.rememberedPerms.get(toolName) ?? new Set();
+				s.add('allow_always');
+				this.rememberedPerms.set(toolName, s);
+				this.prunePending(st, toolCall?.toolCallId, bar);
+				respond({ outcome: { outcome: 'selected', optionId: allowAlways.optionId } });
+				bar.remove();
+			};
+		}
+		if (reject) {
+			bar.createEl('button', { text: 'Reject' }).onclick = () => {
+				bar.dataset.answered = '1';
+				this.prunePending(st, toolCall?.toolCallId, bar);
+				respond({ outcome: { outcome: 'selected', optionId: reject.optionId } });
+				bar.remove();
 			};
 		}
 		park(bar);
@@ -1502,6 +1636,19 @@ export class CodeMChatView extends ItemView {
 			new Notice(`🔒 会话 ${this.tabs.indexOf(tab) + 1} 请求权限确认，请切换到该窗口`);
 		}
 		this.scrollBottom(tab.scrollEl);
+	}
+
+	/** 防僵尸复活辅助：已点击的按钮从 pendingPerms 摘除 + 打 dataset 标记 */
+	private prunePending(st: RenderState, toolCallId: string | undefined, bar: HTMLElement): void {
+		bar.dataset.answered = '1';
+		if (toolCallId) {
+			const list = st.pendingPerms.get(toolCallId);
+			if (list) {
+				const idx = list.indexOf(bar);
+				if (idx >= 0) list.splice(idx, 1);
+				if (!list.length) st.pendingPerms.delete(toolCallId);
+			}
+		}
 	}
 
 	// ===== 内联候选（/ 技能、@ 文件/文件夹） =====
