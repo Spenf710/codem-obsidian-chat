@@ -5,6 +5,18 @@
 	flex-direction: column;
 	height: 100%;
 	padding: 0;
+	/* —— CodeM 视觉 token 层（对标 Claudian 视觉语言，品牌色取 CodeM logo 绿 #4EC888）—— */
+	--codem-brand: #4ec888;
+	--codem-brand-rgb: 78, 200, 136;
+	--codem-brand-text: var(--codem-brand);
+	--codem-radius-s: 6px;
+	--codem-radius-m: 8px;
+	--codem-radius-l: 10px;
+	--codem-transition: 150ms ease;
+}
+
+body.theme-light .codem-chat-root {
+	--codem-brand-text: #2f9e63; /* 光主题下品牌绿加深一档保文本对比 */
 }
 
 .codem-chat-topbar {
@@ -122,13 +134,18 @@
 	word-break: break-word;
 }
 
+/* 用户消息：Claudian 暗气泡——半透明黑底 + 尾角收小 + 右对齐（替换原左竖线引用条形态） */
 .codem-chat-user {
 	align-self: flex-end;
-	max-width: 92%;
-	padding: 8px 12px;
-	background: var(--background-secondary);
-	border-left: 3px solid var(--interactive-accent);
-	border-radius: 6px;
+	max-width: 95%;
+	padding: 10px 14px;
+	background: #0000004d;
+	border-radius: var(--codem-radius-m);
+	border-end-end-radius: 4px;
+}
+
+.codem-chat-user ::selection {
+	background: #ffffff59;
 }
 
 .codem-chat-assistant {
@@ -475,12 +492,12 @@
 	}
 }
 
-/* —— 思考区 —— */
+/* —— 思考区（线程线形态：品牌色呼吸标题 + 左竖线内容，is-done 后静止）—— */
 
 .codem-chat-thinking {
-	margin-bottom: 6px;
-	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
+	margin: 8px 0;
+	padding: 4px 0;
+	font-size: 13px;
 }
 
 .codem-chat-thinking summary,
@@ -489,30 +506,50 @@
 	user-select: none;
 }
 
-.codem-chat-thinking-body {
-	white-space: pre-wrap;
-	max-height: 200px;
-	overflow-y: auto;
-	margin-top: 4px;
-	padding: 6px 8px;
-	background: var(--background-secondary);
-	border-radius: 6px;
+.codem-chat-thinking summary {
+	color: var(--codem-brand-text);
+	font-style: italic;
+	font-weight: 500;
 }
 
-/* —— 工具折叠区 —— */
+/* 思考中呼吸动画：finishTurn 加 is-done / 历史回显直接带 is-done 后静止 */
+.codem-chat-thinking:not(.is-done) summary {
+	animation: codem-thinking-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes codem-thinking-pulse {
+	0%,
+	100% {
+		opacity: 0.5;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+.codem-chat-thinking-body {
+	white-space: pre-wrap;
+	max-height: 400px;
+	overflow-y: auto;
+	margin: 4px 0 0 7px;
+	padding: 4px 0 4px 17px;
+	border-inline-start: 1px solid var(--background-modifier-border);
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+/* —— 工具时间线（Claudian 线程形态）：头行图标+monospace 名+状态图标，内容左竖线缩进，无卡片底 —— */
 
 .codem-chat-tools {
-	margin-bottom: 6px;
+	margin: 8px 0;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
 
-/* 独立工具卡片（时间线节点）：执行中展开、完成收起 */
+/* 工具时间线节点：执行中展开、完成收起 */
 .codem-chat-tool {
-	margin: 4px 0;
-	padding: 4px 8px;
-	background: var(--background-secondary);
-	border-radius: 6px;
+	margin: 8px 0;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
@@ -522,8 +559,85 @@
 	user-select: none;
 }
 
+/* 头行：图标 + 工具名（弹性收缩 ellipsis）+ 右侧状态图标 */
+.codem-chat-tool-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 0;
+	cursor: pointer;
+	overflow: hidden;
+}
+
+.codem-chat-tool:hover .codem-chat-tool-head,
+.codem-chat-tool-head:hover {
+	opacity: 0.85;
+}
+
+.codem-chat-tool-icon {
+	display: inline-flex;
+	align-items: center;
+	color: var(--text-accent);
+	flex-shrink: 0;
+}
+
+.codem-chat-tool-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.codem-chat-tool-name {
+	font-family: var(--font-monospace);
+	font-size: 13px;
+	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	flex: 1;
+	min-width: 0;
+}
+
+/* 状态图标三色位（blocked=橙 / cancelled=灰 预留，当前数据源仅 running/completed/failed） */
+.codem-chat-tool-status {
+	display: inline-flex;
+	align-items: center;
+	flex-shrink: 0;
+	margin-left: auto;
+}
+
+.codem-chat-tool-status svg {
+	width: 14px;
+	height: 14px;
+}
+
+.codem-chat-tool-status.is-running {
+	color: var(--codem-brand-text);
+	animation: codem-spin 1.2s linear infinite;
+}
+
+.codem-chat-tool-status.is-completed {
+	color: var(--color-green);
+}
+
+.codem-chat-tool-status.is-failed {
+	color: var(--color-red);
+}
+
+@keyframes codem-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* 内容区：左竖线线程（入参/diff/结果/权限条共同宿主） */
+.codem-chat-tool-content {
+	margin: 4px 0 4px 7px;
+	padding: 4px 0 4px 16px;
+	border-inline-start: 1px solid var(--background-modifier-border);
+}
+
 .codem-chat-tool .codem-chat-tool-raw {
-	margin-top: 4px;
+	margin-top: 2px;
 }
 
 /* 时间线正文段（阶段性输出/最终结论）段间距 */
@@ -533,47 +647,54 @@
 	margin-top: 6px;
 }
 
+/* 独立工具条目（历史回放）：同线程形态 */
 .codem-chat-toolitem-standalone {
+	margin: 8px 0;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
-	border: 1px dashed var(--background-modifier-border);
-	border-radius: 6px;
-	padding: 4px 8px;
 }
 
 .codem-chat-toolitem-standalone summary {
 	cursor: pointer;
+	font-family: var(--font-monospace);
+	font-size: 13px;
+	color: var(--text-normal);
 }
 
+.codem-chat-toolitem-standalone .codem-chat-tool-result {
+	margin-left: 7px;
+	padding-left: 16px;
+	border-inline-start: 1px solid var(--background-modifier-border);
+}
+
+/* 历史回放工具条目：左竖线缩进 */
 .codem-chat-tool-item {
-	margin: 4px 0;
-	padding: 4px 8px;
-	background: var(--background-secondary);
-	border-radius: 6px;
-}
-
-.codem-chat-tool-head {
-	word-break: break-all;
+	margin: 4px 0 4px 7px;
+	padding: 2px 0 2px 16px;
+	border-inline-start: 1px solid var(--background-modifier-border);
 }
 
 .codem-chat-tool-raw {
 	color: var(--text-faint);
 	font-family: var(--font-monospace);
-	font-size: var(--font-ui-smaller);
+	font-size: 12px;
 	word-break: break-all;
 	margin-top: 2px;
 }
 
 .codem-chat-tool-result {
-	max-height: 160px;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--text-muted);
+	max-height: 300px;
 	overflow-y: auto;
 	margin: 4px 0 0;
-	padding: 6px;
+	padding: 0;
 	white-space: pre-wrap;
 	word-break: break-all;
-	font-size: var(--font-ui-smaller);
-	background: var(--background-primary);
-	border-radius: 4px;
+	background: none;
+	border-radius: 0;
 }
 
 /* —— 权限确认条 —— */
@@ -596,6 +717,18 @@
 
 .codem-chat-perm-auto {
 	background: var(--background-secondary);
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+/* 轮末过期权限条：已响应的不复活，未响应的置灰只留记录 */
+.codem-chat-perm-expired {
+	opacity: 0.55;
+}
+.codem-chat-perm-expired button {
+	pointer-events: none;
+}
+.codem-chat-perm-expired-note {
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
 }
@@ -741,3 +874,40 @@
 	display: flex;
 }
 
+
+/* 轮次用量条 + tab 会话累计小字 */
+.codem-chat-usage { font-size: 11px; color: var(--text-muted); opacity: .75; margin: 2px 0 6px; }
+.codem-chat-tab-usage { font-size: 10px; color: var(--text-muted); margin-left: 2px; opacity: .8; }
+/* 内联 diff */
+.codem-chat-diff { font-family: var(--font-monospace); font-size: 12px; border: 1px solid var(--background-modifier-border); border-radius: 6px; overflow: hidden; margin: 4px 0; }
+.codem-chat-diff-line { display: flex; padding: 0 6px; white-space: pre-wrap; word-break: break-all; }
+.codem-chat-diff-ln { flex: 0 0 34px; text-align: right; margin-right: 8px; color: var(--text-faint); user-select: none; }
+.codem-chat-diff-sign { flex: 0 0 12px; user-select: none; }
+.codem-chat-diff-text { flex: 1; }
+.codem-chat-diff-line.is-ins { background: rgba(var(--color-green-rgb), .12); color: var(--text-success); }
+.codem-chat-diff-line.is-del { background: rgba(var(--color-red-rgb), .12); color: var(--text-error); }
+.codem-chat-diff-line.is-ctx { color: var(--text-muted); }
+/* 图片放大模态 */
+.codem-chat-image-modal-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+.codem-chat-image-modal { position: relative; max-width: 90vw; max-height: 90vh; cursor: default; }
+.codem-chat-image-modal img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+.codem-chat-image-modal-close { position: absolute; top: -14px; right: -14px; width: 28px; height: 28px; border-radius: 50%; background: var(--background-primary); border: 1px solid var(--background-modifier-border); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; }
+
+/* 动效无障碍：系统减动效偏好时停思考呼吸与状态旋转 */
+@media (prefers-reduced-motion: reduce) {
+	.codem-chat-thinking:not(.is-done) summary,
+	.codem-chat-tool-status.is-running {
+		animation: none;
+	}
+}
+
+/* ask_user 不支持提示：工具卡上方醒目但不刺眼 */
+.codem-chat-askuser-hint {
+	margin: 8px 0;
+	padding: 6px 10px;
+	font-size: 13px;
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	border-radius: var(--codem-radius-s);
+	border-left: 3px solid var(--codem-brand);
+}

@@ -11,6 +11,8 @@ export interface AcpOptions {
 	nodePath?: string;
 	/** 额外 CLI 参数（空格分隔，如 "--intelligence high"） */
 	extraArgs?: string;
+	/** 调试日志路径（临时排障用）：记录每条 session/update 原始 JSON */
+	debugLogPath?: string;
 }
 
 export interface AcpHandlers {
@@ -189,7 +191,17 @@ export class AcpClient {
 		}
 		const id = m.id as number | undefined;
 		if (id !== undefined && m.method) {
-			// agent → client 请求
+			// agent → client 请求：全部落盘诊断日志（抓 ask_user 等未知方法的原始报文）
+			if (this.opts.debugLogPath) {
+				try {
+					fs.appendFileSync(
+						this.opts.debugLogPath,
+						`[${new Date().toISOString()}] agent-request method=${m.method} params=${JSON.stringify(m.params).slice(0, 1000)}\n`
+					);
+				} catch {
+					// 调试日志失败不影响主流程
+				}
+			}
 			if (m.method === 'session/request_permission') {
 				this.handlers.onPermissionRequest?.(
 					m.params as Record<string, unknown>,
@@ -203,7 +215,19 @@ export class AcpClient {
 		}
 		if (m.method === 'session/update') {
 			const params = m.params as { sessionId?: string; update?: Record<string, unknown> } | undefined;
-			if (params?.update) this.handlers.onUpdate?.(String(params.sessionId ?? ''), params.update);
+			if (params?.update) {
+				if (this.opts.debugLogPath) {
+					try {
+						fs.appendFileSync(
+							this.opts.debugLogPath,
+							`[${new Date().toISOString()}] sid=${params.sessionId ?? ''} update=${JSON.stringify(params.update).slice(0, 2000)}\n`
+						);
+					} catch {
+						// 调试日志失败不影响主流程
+					}
+				}
+				this.handlers.onUpdate?.(String(params.sessionId ?? ''), params.update);
+			}
 			return;
 		}
 		if (id !== undefined) {

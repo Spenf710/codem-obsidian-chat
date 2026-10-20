@@ -32,8 +32,16 @@ const SUGGEST_MAX = 50;
 interface ToolCard {
 	detailsEl: HTMLDetailsElement;
 	headEl: HTMLElement;
+	/** 头行组件：monospace 工具名（title 更新时 setText） */
+	nameEl: HTMLElement;
+	/** 右侧状态图标宿主（loader/勾/叉） */
+	statusEl: HTMLElement;
+	/** 内容区（左竖线线程）：入参/结果/diff/权限条的共同宿主 */
+	contentEl: HTMLElement;
 	title: string;
 	status: string;
+	/** tool_call 原始入参（pending 阶段用于客户端自构造 diff） */
+	rawInput?: Record<string, unknown>;
 }
 
 /** 流式正文段：阶段性输出 / 最终结论各成一段（工具事件到达时收束） */
@@ -59,6 +67,9 @@ interface RenderState {
 	pendingPerms: Map<string, HTMLElement[]>;
 	/** yolo 批准轮内聚合条（唯一，逐次更新计数，沉底不刷屏） */
 	yoloNote?: { el: HTMLElement; counts: Map<string, number>; total: number };
+	/** 轮次统计：起始时间戳与工具调用次数，轮末渲染耗时条 */
+	turnStart: number;
+	toolCount: number;
 }
 
 /** 待发送图片（粘贴直接进内存，base64 无 data: 前缀） */
@@ -81,6 +92,8 @@ interface ChatTab {
 	turnCount: number;
 	turnPos: number;
 	images: PendingImage[];
+	/** 输入框草稿：切 tab 时隔离，未发送内容不跨会话串台 */
+	draft: string;
 	scrollEl: HTMLElement;
 	/** 最近一次收到 CodeM 更新的时间（无响应看门狗用） */
 	lastActivity: number;
@@ -98,8 +111,34 @@ interface SuggestItem {
 	isFolder?: boolean;
 }
 
-function statusMark(s: string): string {
-	return s === 'completed' ? '✅' : s === 'failed' ? '❌' : s === 'in_progress' ? '⏳' : '';
+/** 工具名 → lucide 图标（语义映射，未命中回退扳手） */
+function toolIcon(title: string): string {
+	const t = title.toLowerCase();
+	if (t.includes('read')) return 'file-text';
+	if (t.includes('grep') || t.includes('search')) return 'search';
+	if (t.includes('glob')) return 'file-search';
+	if (t.includes('edit')) return 'pencil';
+	if (t.includes('write')) return 'file-plus';
+	if (t.includes('bash') || t.includes('shell')) return 'terminal';
+	if (t.includes('web')) return 'globe';
+	if (t.includes('skill')) return 'zap';
+	return 'wrench';
+}
+
+/** 工具状态 → 右侧状态图标（loader 旋转/勾/叉），配色由 class 控制（线程线形态） */
+function setToolStatus(el: HTMLElement, status: string): void {
+	el.removeClass('is-running', 'is-completed', 'is-failed');
+	el.empty();
+	if (status === 'completed') {
+		el.addClass('is-completed');
+		setIcon(el, 'check');
+	} else if (status === 'failed') {
+		el.addClass('is-failed');
+		setIcon(el, 'x');
+	} else {
+		el.addClass('is-running');
+		setIcon(el, 'loader-2');
+	}
 }
 
 /** 右侧边栏聊天视图（ACP 架构）：流式/思考/工具/权限确认/内联候选/轮次导航/历史续接 */
@@ -231,6 +270,11 @@ export class CodeMChatView extends ItemView {
 
 		// 消息区（含悬浮导航按钮组）：每个 tab 一个消息容器，切换显隐
 		this.msgArea = root.createDiv({ cls: 'codem-chat-msgarea' });
+		// 图片点击放大：事件委托挂 msgArea（全 tab 共享父容器），模态挂 contentEl
+		this.msgArea.addEventListener('click', (e) => {
+			const img = (e.target as HTMLElement).closest('img');
+			if (img instanceof HTMLImageElement && img.src.startsWith('data:')) this.openImageModal(img.src);
+		});
 
 		// tab 行在输入框外面（上方）：左 tab 组，右 +/历史图标（参考 Claudian UI）
 		const tabRow = root.createDiv({ cls: 'codem-chat-tabrow' });
@@ -557,6 +601,7 @@ export class CodeMChatView extends ItemView {
 			turnCount: 0,
 			turnPos: 0,
 			images: [],
+			draft: '',
 			scrollEl: null as unknown as HTMLElement,
 			lastActivity: 0,
 			turnSeq: 0,
@@ -593,8 +638,11 @@ export class CodeMChatView extends ItemView {
 		this.closeDir();
 		this.closeSuggest();
 		this.closeHistory();
+		// 输入框草稿随 tab 隔离：离开时保存、进入时恢复
+		this.activeTab.draft = this.inputEl.value;
 		for (const t of this.tabs) t.scrollEl.toggleClass('codem-is-hidden', t !== tab);
 		this.activeTab = tab;
+		this.inputEl.value = tab.draft;
 		this.renderTabs();
 		this.renderPreviews();
 		this.setStatusLight(tab.light);
@@ -662,8 +710,10 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 		this.closeDir();
+		tab.draft = this.inputEl.value; // 旧会话草稿随 tab 保留
 		for (const t of this.tabs) t.scrollEl.addClass('codem-is-hidden');
 		this.activeTab = this.createTab();
+		this.inputEl.value = ''; // 新窗口从空输入开始
 		this.renderEmpty();
 		this.renderTabs();
 		this.setStatusLight('idle');
@@ -768,11 +818,13 @@ export class CodeMChatView extends ItemView {
 	}
 
 	private pluginOpts(): AcpOptions {
+		const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
 		return {
 			cliPath: this.plugin.settings.codemCliPath,
-			cwd: (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath(),
+			cwd,
 			nodePath: this.plugin.settings.nodePath,
 			extraArgs: this.plugin.settings.extraArgs,
+			debugLogPath: undefined,
 		};
 	}
 
@@ -814,6 +866,7 @@ export class CodeMChatView extends ItemView {
 		tab.busy = true;
 		this.setStatusLight('running');
 		this.inputEl.value = '';
+		tab.draft = '';
 		this.closeSuggest();
 		tab.scrollEl.querySelector('.codem-chat-empty')?.remove();
 
@@ -949,6 +1002,7 @@ export class CodeMChatView extends ItemView {
 		this.flushSeg(st);
 		if (st.thinkingBody.textContent) {
 			st.thinkingSummary.setText('思考过程');
+			st.thinking.addClass('is-done'); // 停思考呼吸动画（回看静止态）
 			st.thinking.removeAttribute('open');
 		} else {
 			st.thinking.hide();
@@ -958,10 +1012,24 @@ export class CodeMChatView extends ItemView {
 		if (st.pendingPerms.size) {
 			if (!stopped) {
 				for (const list of st.pendingPerms.values()) {
-					for (const el of list) st.aiBlock.appendChild(el);
-				}
-			}
-			st.pendingPerms.clear();
+					for (const el of list) {
+				if (el.dataset.answered === '1') continue; // 已响应的条不复活
+			// 轮已结束：该请求已无法被 agent 处理，按钮置灰防误点，信息保留可见
+			el.addClass('codem-chat-perm-expired');
+		el.querySelectorAll('button').forEach((b) => ((b as HTMLButtonElement).disabled = true));
+		     el.createSpan({ text: '（本轮已结束，未处理）', cls: 'codem-chat-perm-expired-note' });
+		     st.aiBlock.appendChild(el);
+		    }
+		   }
+		  }
+		  st.pendingPerms.clear();
+		 }
+		// 轮末统计条：耗时与工具次数（CodeM 不发 token 用量，改用可观测指标）
+		if (!stopped) {
+			const secs = Math.max(1, Math.round((Date.now() - st.turnStart) / 1000));
+			const parts = [`⏱ 耗时 ${secs} 秒`];
+			if (st.toolCount > 0) parts.push(`🔧 ${st.toolCount} 次工具`);
+			st.aiBlock.createDiv({ cls: 'codem-chat-usage', text: parts.join(' · ') });
 		}
 	}
 
@@ -1073,7 +1141,7 @@ export class CodeMChatView extends ItemView {
 		const thinkingSummary = thinking.createEl('summary', { text: '思考中…' });
 		const thinkingBody = thinking.createDiv({ cls: 'codem-chat-thinking-body' });
 		this.scrollBottom();
-		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map() };
+		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map(), turnStart: Date.now(), toolCount: 0 };
 	}
 
 	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
@@ -1174,6 +1242,13 @@ export class CodeMChatView extends ItemView {
 			st.thinkingBody.scrollTop = st.thinkingBody.scrollHeight;
 			this.scrollBottom(tab.scrollEl);
 		} else if (kind === 'tool_call' || kind === 'tool_call_update') {
+			// ask_user 在当前 CodeM 版本（0.1.229/agent 0.8.59+）不支持插件侧 RPC 交互：
+			// 探针实测 agent 不发送任何 agent→client 请求，tool_call 秒完成并返回
+			// {"status":"cancelled"}。用户无法进行任何选择，故在工具卡上方给明确提示。
+			const isAskUserCancel = (update.title === 'ask_user' || update.kind === 'other') && status === 'completed';
+			if (isAskUserCancel) {
+				st.aiBlock.createDiv({ cls: 'codem-chat-askuser-hint' }).setText('ℹ️ ask_user 选项交互当前版本暂不支持，CodeM 侧已自动取消本次选择。');
+			}
 			this.handleToolEvent(st, update, tab.scrollEl);
 		}
 	}
@@ -1186,33 +1261,56 @@ export class CodeMChatView extends ItemView {
 		let card = st.cards.get(id);
 		if (!card) {
 			const title = (update.title as string) || (update.kind as string) || '工具';
-			// 独立工具卡片（时间线节点）：执行中展开，完成后收起，失败保持展开
+			// 工具时间线节点（Claudian 线程形态）：头行图标+monospace 名+状态图标，内容走左竖线缩进
 			const details = createEl('details', { cls: 'codem-chat-tool' });
 			details.setAttribute('open', '');
 			st.anchor.after(details);
 			st.anchor = details;
 			const headEl = details.createEl('summary', { cls: 'codem-chat-tool-head' });
-			headEl.setText(`${title} ${statusMark(status)}`.trimEnd());
+			const iconEl = headEl.createSpan({ cls: 'codem-chat-tool-icon' });
+			setIcon(iconEl, toolIcon(title));
+			const nameEl = headEl.createSpan({ cls: 'codem-chat-tool-name', text: title });
+			const statusEl = headEl.createSpan({ cls: 'codem-chat-tool-status' });
+			setToolStatus(statusEl, status || 'in_progress');
+			const contentEl = details.createDiv({ cls: 'codem-chat-tool-content' });
 			const rawInput = update.rawInput;
 			if (rawInput && typeof rawInput === 'object' && Object.keys(rawInput).length > 0) {
-				details.createDiv({ cls: 'codem-chat-tool-raw' }).setText(JSON.stringify(rawInput).slice(0, 300));
+				contentEl.createDiv({ cls: 'codem-chat-tool-raw' }).setText(JSON.stringify(rawInput).slice(0, 300));
 			}
-			card = { detailsEl: details, headEl, title, status };
+			card = {
+				detailsEl: details,
+				headEl,
+				nameEl,
+				statusEl,
+				contentEl,
+				title,
+				status,
+				rawInput: rawInput && typeof rawInput === 'object' ? (rawInput as Record<string, unknown>) : undefined,
+			};
 			st.cards.set(id, card);
-			// 回挂早到的权限条（request_permission 先于 tool_call 到达的场景）；
+			// 回挂早到的权限条（request_permission 先于 tool_call 到达的场景）到内容区；
 			// 确保卡片展开，防权限条藏在折叠区内不可见
 			const pended = st.pendingPerms.get(id);
 			if (pended) {
-				for (const el of pended) card.detailsEl.appendChild(el);
+				for (const el of pended) {
+					if (el.dataset.answered === '1') continue; // 已响应的条不复活
+					card.contentEl.appendChild(el);
+				}
 				st.pendingPerms.delete(id);
 				card.detailsEl.setAttribute('open', '');
 			}
+			st.toolCount++;
+			// 客户端自构造 diff（CodeM 不发 diff 数据）：pending 阶段读原文件定位行号
+			void this.buildEditDiff(card);
 		} else {
 			const incomingTitle = update.title as string | undefined;
-			if (incomingTitle) card.title = incomingTitle;
+			if (incomingTitle && incomingTitle !== card.title) {
+				card.title = incomingTitle;
+				card.nameEl.setText(incomingTitle);
+			}
 			if (status && status !== card.status) {
 				card.status = status;
-				card.headEl.setText(`${card.title} ${statusMark(status)}`.trimEnd());
+				setToolStatus(card.statusEl, status);
 				if (status === 'completed') card.detailsEl.removeAttribute('open');
 			}
 		}
@@ -1220,7 +1318,7 @@ export class CodeMChatView extends ItemView {
 		for (const c of contents) {
 			const text = c?.content?.text ?? c?.text;
 			if (text) {
-				card.detailsEl.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(
+				card.contentEl.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(
 					text.length > TOOL_RESULT_MAX_LEN
 						? text.slice(0, TOOL_RESULT_MAX_LEN) + `…（截断，共 ${text.length} 字符）`
 						: text
@@ -1240,12 +1338,86 @@ export class CodeMChatView extends ItemView {
 		seg.el.appendChild(renderMarkdown(seg.buf));
 	}
 
+	/** 行级 diff 渲染：insert 绿 / delete 红 / context 灰 + 行号，DOM API（textContent）防注入 */
+	private renderDiff(container: HTMLElement, lines: Array<{ kind: 'ins' | 'del' | 'ctx'; old?: number; new?: number; text: string }>): void {
+		if (!lines.length) return;
+		const wrap = container.createDiv({ cls: 'codem-chat-diff' });
+		for (const line of lines) {
+			const row = wrap.createDiv({ cls: `codem-chat-diff-line is-${line.kind}` });
+			const ln = line.kind === 'ins' ? line.new : line.old;
+			row.createSpan({ cls: 'codem-chat-diff-ln', text: ln != null ? String(ln) : '' });
+			row.createSpan({ cls: 'codem-chat-diff-sign', text: line.kind === 'ins' ? '+' : line.kind === 'del' ? '-' : ' ' });
+			row.createSpan({ cls: 'codem-chat-diff-text', text: line.text });
+		}
+	}
+
+	/** 客户端自构造 diff：CodeM 的 tool_call_update 不带 diff 数据，
+	 * 在 tool_call（pending，早于实际执行）阶段用 vault API 读原文件定位 old_string 行号 */
+	private async buildEditDiff(card: ToolCard): Promise<void> {
+		const raw = card.rawInput;
+		if (!raw) return;
+		try {
+			const oldStr = typeof raw.old_string === 'string' ? raw.old_string : '';
+			const newStr = typeof raw.new_string === 'string' ? raw.new_string : '';
+			if (!oldStr) {
+				// 全量写入（write_file）：所有行按新增展示，行号即内容行序
+				const content = typeof raw.content === 'string' ? raw.content : '';
+				if (!content) return;
+				this.renderDiff(card.contentEl, content.split('\n').map((text, i) => ({ kind: 'ins' as const, new: i + 1, text })));
+				return;
+			}
+			const path = typeof raw.path === 'string' ? raw.path : '';
+			if (!path) return;
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) return;
+			const content = await this.app.vault.cachedRead(file);
+			const idx = content.indexOf(oldStr);
+			if (idx < 0) return;
+			const startLine = content.slice(0, idx).split('\n').length;
+			const oldLines = oldStr.split('\n');
+			const newLines = newStr === '' ? [] : newStr.split('\n');
+			const out: Array<{ kind: 'ins' | 'del' | 'ctx'; old?: number; new?: number; text: string }> = [];
+			const n = Math.max(oldLines.length, newLines.length);
+			for (let i = 0; i < n; i++) {
+				const ol = oldLines[i];
+				const nl = newLines[i];
+				if (ol !== undefined && nl !== undefined && ol === nl) {
+					out.push({ kind: 'ctx', old: startLine + i, new: startLine + i, text: ol });
+				} else if (ol !== undefined && nl !== undefined) {
+					out.push({ kind: 'del', old: startLine + i, text: ol });
+					out.push({ kind: 'ins', new: startLine + i, text: nl });
+				} else if (ol !== undefined) {
+					out.push({ kind: 'del', old: startLine + i, text: ol });
+				} else if (nl !== undefined) {
+					out.push({ kind: 'ins', new: startLine + i, text: nl });
+				}
+			}
+			this.renderDiff(card.contentEl, out);
+		} catch {
+			// 读文件/定位失败：静默降级，不影响主流程
+		}
+	}
+
+	/** 图片放大模态：挂 contentEl（scrollEl 会被 empty() 清空），点击遮罩关闭 */
+	private openImageModal(src: string): void {
+		const overlay = this.contentEl.createDiv({ cls: 'codem-chat-image-modal-overlay' });
+		overlay.addEventListener('click', () => overlay.remove());
+		const modal = overlay.createDiv({ cls: 'codem-chat-image-modal' });
+		modal.createEl('img', { attr: { src } });
+		const close = modal.createDiv({ cls: 'codem-chat-image-modal-close', text: '×' });
+		close.addEventListener('click', (e) => { e.stopPropagation(); overlay.remove(); });
+	}
+
 	private handlePermission(
 		params: Record<string, unknown>,
 		respond: (result: unknown) => void
 	): void {
-		// 按 sessionId 路由到发起 tab；协议未带时退回当前 tab
-		const tab = this.tabs.find((t) => t.sessionId === params.sessionId) ?? this.activeTab;
+		// 按 sessionId 路由到发起 tab；匹配不到时优先回退到唯一执行中的 tab（防多 tab 下
+		// 回落到新建空会话 → 找不到渲染状态 → 权限被默认取消）；都没有才退回当前 tab
+		const tab =
+			this.tabs.find((t) => t.sessionId === params.sessionId) ??
+			this.tabs.find((t) => t.busy && t.current) ??
+			this.activeTab;
 		const st = tab.current;
 		const toolCall = params.toolCall as { toolCallId?: string; title?: string } | undefined;
 		const label = toolCall?.title ?? '工具请求权限';
@@ -1265,7 +1437,7 @@ export class CodeMChatView extends ItemView {
 		let host: HTMLElement | null = null;
 		if (toolCall?.toolCallId) {
 			const card = st.cards.get(toolCall.toolCallId);
-			if (card) host = card.detailsEl;
+			if (card) host = card.contentEl;
 		}
 		const park = (el: HTMLElement): void => {
 			if (host) {
@@ -1309,10 +1481,26 @@ export class CodeMChatView extends ItemView {
 		for (const opt of options) {
 			bar.createEl('button', { text: opt.name }).onclick = () => {
 				bar.remove();
+				// 防僵尸复活：bar.remove() 只摘 DOM，Map 条目残留会导致轮末兑底/回挂时
+				// 把已点击的条再加回来（实测：任务正常结束后堆出一排已响应对的权限条）。
+				// 已响应的条立即从暂存区摘除，并打 dataset 标记双保险
+				bar.dataset.answered = '1';
+				if (toolCall?.toolCallId) {
+					const list = st.pendingPerms.get(toolCall.toolCallId);
+					if (list) {
+						const idx = list.indexOf(bar);
+						if (idx >= 0) list.splice(idx, 1);
+						if (!list.length) st.pendingPerms.delete(toolCall.toolCallId);
+					}
+				}
 				respond({ outcome: { outcome: 'selected', optionId: opt.optionId } });
 			};
 		}
 		park(bar);
+		// 权限条落在发起 tab 的时间线里：当前正看别的 tab 时给导航提示，否则用户不知道要去哪确认
+		if (tab !== this.activeTab) {
+			new Notice(`🔒 会话 ${this.tabs.indexOf(tab) + 1} 请求权限确认，请切换到该窗口`);
+		}
 		this.scrollBottom(tab.scrollEl);
 	}
 
@@ -1570,6 +1758,15 @@ export class CodeMChatView extends ItemView {
 
 	/** 载入历史会话：jsonl 回显 + ACP session/load 原生续接；失败自动转软续接（快照上下文） */
 	private async loadHistory(card: SessionCard): Promise<void> {
+		// 会话唯一持有：目标会话已在其他 tab 打开 → 直接切换过去，禁止双开。
+		// 双开会使两个 tab 持有同一 sessionId：update/permission 按 find 首个匹配路由到旧 tab，
+		// 表现为新窗口内容串台、权限请求找不到渲染状态被默认取消；busy 会话还会被 closeSession 误杀
+		const holder = this.tabs.find((t) => t !== this.activeTab && t.sessionId === card.sessionId);
+		if (holder) {
+			new Notice('该会话已在另一个窗口打开，已为你切换过去');
+			this.switchTab(holder);
+			return;
+		}
 		this.busy = true;
 		this.msgContainer.empty();
 		this.resetTurnNav();
@@ -1668,7 +1865,7 @@ export class CodeMChatView extends ItemView {
 			const aiBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
 			const thinks = t.blocks.filter((b) => b.kind === 'thinking');
 			if (thinks.length) {
-				const d = aiBlock.createEl('details', { cls: 'codem-chat-thinking' });
+				const d = aiBlock.createEl('details', { cls: 'codem-chat-thinking is-done' });
 				d.createEl('summary', { text: '思考过程' });
 				d.createDiv({ cls: 'codem-chat-thinking-body' }).setText(thinks.map((b) => b.content).join('\n\n'));
 			}
@@ -1683,9 +1880,13 @@ export class CodeMChatView extends ItemView {
 				const d = aiBlock.createEl('details', { cls: 'codem-chat-tools' });
 				d.createEl('summary', { text: `🔧 工具调用 ${tools.length} 项` });
 				for (const b of tools) {
+					const label = b.label ?? '工具';
 					const item = d.createDiv({ cls: 'codem-chat-tool-item' });
-					item.createDiv({ cls: 'codem-chat-tool-head' }).setText(b.label ?? '工具');
-					item.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
+					const h = item.createDiv({ cls: 'codem-chat-tool-head' });
+				const ic = h.createSpan({ cls: 'codem-chat-tool-icon' });
+				 setIcon(ic, toolIcon(label));
+				 h.createSpan({ cls: 'codem-chat-tool-name', text: label });
+				 item.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
 				}
 			}
 		} else {
