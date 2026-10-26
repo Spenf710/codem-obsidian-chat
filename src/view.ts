@@ -195,6 +195,8 @@ export class CodeMChatView extends ItemView {
 	private client: AcpClient | null = null;
 	private inputEl!: HTMLTextAreaElement;
 	private permBtn!: HTMLButtonElement;
+	/** 权限 chip 的文案 span（v0.5.2：紧凑短词 + ▾，与智能/推理 chip 同构） */
+	private permLabelEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
@@ -381,8 +383,10 @@ export class CodeMChatView extends ItemView {
 		this.sidEl = bottomRow.createSpan({ cls: 'codem-chat-sid' });
 		// chip 行（v0.5.1 UI 对标叶版）：权限 / 智能 / 推理 / Plan，一行小胶囊控件
 		const chips = bottomRow.createDiv({ cls: 'codem-chat-chips' });
-		// 权限模式 chip：下拉菜单三选一（替代 v0.5.0 的循环点击）
+		// 权限模式 chip：下拉菜单三选一（v0.5.2：紧凑短词 + ▾，与叶部同构）
 		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip' });
+		this.permLabelEl = this.permBtn.createSpan();
+		this.permBtn.createSpan({ cls: 'caret', text: '▾' });
 		this.permBtn.setAttribute('aria-label', '权限模式：手动 / 智能 / YOLO，点击选择');
 		this.permBtn.onclick = (e) => {
 			const menu = new Menu();
@@ -928,16 +932,16 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	/** 设置权限模式：底部按钮文案/高亮同步（运行时态，初始值来自设置页） */
+	/** 设置权限模式：底部 chip 文案/高亮同步（运行时态，初始值来自设置页） */
 	private setPermMode(mode: 'manual' | 'smart' | 'yolo'): void {
 		this.permMode = mode;
 		const labels: Record<'manual' | 'smart' | 'yolo', string> = {
-			manual: '🔒 手动审批',
-			smart: '✨ 智能审批',
+			manual: '🔒 手动',
+			smart: '✨ 智能',
 			yolo: '🤖 YOLO',
 		};
-		this.permBtn.setText(labels[mode]);
-		this.permBtn.toggleClass('is-active', mode === 'yolo');
+		this.permLabelEl?.setText(labels[mode]);
+		this.permBtn.toggleClass('is-on', mode === 'yolo');
 	}
 
 	/** 循环切换权限模式：手动 → 智能 → YOLO */
