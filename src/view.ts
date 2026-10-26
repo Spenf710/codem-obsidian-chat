@@ -1460,6 +1460,18 @@ export class CodeMChatView extends ItemView {
 			this.linkifyWikilinks(body);
 			this.decorateCodeBlocks(body);
 		}
+		// v0.7.1（叶部式）：用户消息 hover 复制按钮
+		if (text) {
+			const copyBtn = row.createEl('button', { cls: 'codem-chat-copy-btn', text: '📋' });
+			copyBtn.setAttribute('aria-label', '复制此消息');
+			copyBtn.onclick = (e) => {
+				e.stopPropagation();
+				void navigator.clipboard.writeText(text).then(() => {
+					copyBtn.setText('✅');
+					window.setTimeout(() => copyBtn.setText('📋'), 1500);
+				});
+			};
+		}
 		for (const img of images) {
 			userBlock.createEl('img', { cls: 'codem-chat-img', attr: { src: `data:${img.mime};base64,${img.data}` } });
 		}
