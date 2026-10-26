@@ -1857,20 +1857,20 @@ export class CodeMChatView extends ItemView {
 		let card = st.cards.get(id);
 		if (!card) {
 			const title = (update.title as string) || (update.kind as string) || '工具';
-			// 工具时间线节点（Claudian 线程形态）：头行图标+monospace 名+状态图标，内容走左竖线缩进
+			// v1.0.0 DOM 对齐叶部：类名 cat-* → is-*（叶部 CSS 选择器 .codem-chat-tool.is-bash 等）
+			// 图标由叶部 CSS ::before 伪元素渲染（content:"💻" 等），不再在 DOM 里插 span
 			const cat = toolCategory(title);
-			const details = createEl('details', { cls: 'codem-chat-tool cat-' + cat });
+			const details = createEl('details', { cls: 'codem-chat-tool is-' + cat });
 			details.setAttribute('open', '');
 			st.anchor.after(details);
 			st.anchor = details;
-			const headEl = details.createEl('summary', { cls: 'codem-chat-tool-head' });
-			const iconEl = headEl.createSpan({ cls: 'codem-chat-tool-icon' });
-			setIcon(iconEl, toolIcon(title));
+			// v1.0.0 DOM 对齐叶部：summary 直接 flex 布局（CSS 控制图标+间距），无 tool-head/tool-icon span
+			const headEl = details.createEl('summary');
 			const nameEl = headEl.createSpan({ cls: 'codem-chat-tool-name', text: title });
-			// 写操作风险徽章（v0.5.0 UI 对标叶版）：bash/edit 类醒目标注
-			if (cat === 'bash' || cat === 'edit') headEl.createSpan({ cls: 'codem-chat-tool-risk', text: '⚠ 可写' });
+			// v1.0.0 DOM 对齐叶部：状态用 data-status 属性驱动 CSS 颜色（.codem-chat-tool-status[data-status="completed"] { color: green }）
 			const statusEl = headEl.createSpan({ cls: 'codem-chat-tool-status' });
-			setToolStatus(statusEl, status || 'in_progress');
+			statusEl.setAttribute('data-status', status || 'in_progress');
+			statusEl.setText(status === 'completed' ? '✓' : status === 'failed' ? '✗' : '…');
 			const contentEl = details.createDiv({ cls: 'codem-chat-tool-content' });
 			const rawInput = update.rawInput;
 			if (rawInput && typeof rawInput === 'object' && Object.keys(rawInput).length > 0) {
@@ -1909,7 +1909,8 @@ export class CodeMChatView extends ItemView {
 			}
 			if (status && status !== card.status) {
 				card.status = status;
-				setToolStatus(card.statusEl, status);
+				card.statusEl.setAttribute('data-status', status);
+				card.statusEl.setText(status === 'completed' ? '✓' : status === 'failed' ? '✗' : '…');
 				if (status === 'completed') card.detailsEl.removeAttribute('open');
 			}
 		}
