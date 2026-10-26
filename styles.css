@@ -1192,28 +1192,25 @@ button.codem-chat-code-copy:hover { color: var(--text-normal); }
 	flex: 1;
 	min-width: 0;
 }
+/* v0.5.3：纯文字形态（用户反馈：不要按钮包裹）——无边框无背景，hover/开启只变文字色 */
 .codem-chat-chip {
 	display: inline-flex;
 	align-items: center;
 	gap: 3px;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
-	padding: 1px 8px;
-	border-radius: 10px;
-	border: 1px solid var(--background-modifier-border);
-	background: var(--background-secondary);
+	padding: 0;
+	border: none;
+	background: transparent;
 	cursor: pointer;
 	line-height: 1.6;
 	white-space: nowrap;
 }
 .codem-chat-chip:hover {
 	color: var(--text-normal);
-	border-color: var(--interactive-accent);
 }
 .codem-chat-chip.is-on {
 	color: var(--text-accent);
-	border-color: var(--interactive-accent);
-	background: rgba(var(--interactive-accent-rgb, 0, 102, 204), 0.1);
 }
 .codem-chat-chip .caret {
 	font-size: 9px;
