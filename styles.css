@@ -1510,3 +1510,13 @@ input.codem-chat-tab-rename-input {
 	background: none;
 	color: var(--text-error);
 }
+
+/* v0.7.0（叶部式）：未送达标记——发送失败时用户气泡标灰 + 底部提示 */
+.codem-chat-undelivered .codem-chat-user {
+	opacity: 0.55;
+}
+.codem-chat-undelivered-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-error);
+	padding: 2px 0;
+}

@@ -1332,6 +1332,10 @@ export class CodeMChatView extends ItemView {
 			turnFailed = true;
 			this.stopTypewriter(tab);
 			window.clearInterval(st.liveTimer);
+			// v0.7.0（叶部式）：未送达标记——发送失败时用户气泡标灰提示，内容不丢
+			userBlock.addClass('codem-chat-undelivered');
+			const un = userBlock.querySelector('.codem-chat-user');
+			un?.createDiv({ cls: 'codem-chat-undelivered-note', text: '未送达 · 可复制后重试' });
 			const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
 			try {
 				const base = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
@@ -2619,5 +2623,62 @@ export class CodeMChatView extends ItemView {
 			else if (child instanceof TFolder) out.push(...CodeMChatView.collectMd(child));
 		}
 		return out;
+	}
+
+	// ===== v0.7.0（叶部式）：会话持久化 getState/setState —— 重启 Obsidian 后恢复 tab 结构 =====
+
+	/** 序列化当前视图状态：各 tab 的会话 id/标题/pin/标签，重启后据此重建 */
+	getState(): Record<string, unknown> {
+		const tabs = this.tabs.map((t) => ({
+			sessionId: t.sessionId,
+			pinned: t.pinned,
+			label: t.label,
+			turnCount: t.turnCount,
+		}));
+		return { codemChatTabs: tabs, activeIdx: this.tabs.indexOf(this.activeTab) };
+	}
+
+	/** 恢复视图状态：重建 tab 槽位并标记待恢复会话（内容在下次 ensureClient 后 load 回来） */
+	async setState(state: unknown, result: unknown): Promise<void> {
+		const s = state as Record<string, unknown>;
+		const tabs = s.codemChatTabs as Array<{ sessionId: string | null; pinned?: boolean; label?: string | null; turnCount?: number }> | undefined;
+		if (!Array.isArray(tabs) || !tabs.length) return;
+		try {
+			// 清掉默认 tab，按快照重建
+			for (const t of this.tabs) t.scrollEl.remove();
+			this.tabs = [];
+			for (const t of tabs.slice(0, this.plugin.settings.maxWindows || 3)) {
+				const tab = this.createTab();
+				tab.sessionId = t.sessionId ?? null;
+				tab.pinned = !!t.pinned;
+				tab.label = t.label ?? null;
+				tab.turnCount = t.turnCount ?? 0;
+			}
+			if (!this.tabs.length) this.createTab();
+			const activeIdx = typeof s.activeIdx === 'number' ? s.activeIdx : 0;
+			this.activeTab = this.tabs[Math.min(Math.max(0, activeIdx), this.tabs.length - 1)];
+			for (const t of this.tabs) t.scrollEl.toggleClass('codem-is-hidden', t !== this.activeTab);
+			this.renderTabs();
+			this.renderEmpty();
+			this.setStatusLight(this.activeTab.light);
+			this.updateSidEl();
+			// 会话内容用既有历史载入机制拉回（软续接兑底，原生 load 失败也不丢）
+			for (const t of this.tabs) {
+				if (t.sessionId) void this.restoreTabSession(t);
+			}
+		} catch {
+			// 恢复失败：保持默认空 tab，不影响使用
+		}
+	}
+
+	/** 恢复单个 tab 的会话：优先原生 load，失败转软续接快照（复用 loadHistory 机制的数据层） */
+	private async restoreTabSession(tab: ChatTab): Promise<void> {
+		try {
+			const client = await this.ensureClient();
+			await client.loadSession(tab.sessionId!);
+			// load 成功：重放通知因 tab.current 为空被忽略，不污染时间线
+		} catch {
+			// 被占用/不可载入：留 sessionId，下次发送时会自动新建会话并带软续接
+		}
 	}
 }
