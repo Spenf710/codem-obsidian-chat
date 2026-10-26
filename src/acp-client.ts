@@ -115,6 +115,8 @@ export async function runCodemHeadless(opts: AcpOptions, prompt: string, timeout
 interface Pending {
 	resolve: (v: unknown) => void;
 	reject: (e: Error) => void;
+	/** 请求超时定时器句柄（undefined = 该请求不设超时，如 session/prompt） */
+	timer?: number;
 }
 
 /**
@@ -234,19 +236,33 @@ export class AcpClient {
 			const p = this.pending.get(id);
 			if (!p) return;
 			this.pending.delete(id);
+			if (p.timer !== undefined) window.clearTimeout(p.timer);
 			if (m.error) p.reject(new Error(JSON.stringify(m.error)));
 			else p.resolve(m.result);
 		}
 	}
 
-	private request(method: string, params: unknown): Promise<unknown> {
+	/**
+	 * 发送 JSON-RPC 请求。短命令（initialize/new/load/close）默认 300s 超时——
+	 * 此前 pending Map 里的 Promise 永不 reject，进程假死时调用方只能无限等待；
+	 * session/prompt 的最终响应在整轮结束后才返回（可长跑），传 null 不设 RPC 超时，
+	 * 无响应场景由视图层 watchdog 兜底（5min 提示 / 6min 强制收尾）。
+	 */
+	private request(method: string, params: unknown, timeoutMs: number | null = 300_000): Promise<unknown> {
 		return new Promise((resolve, reject) => {
 			if (!this.child?.stdin) {
 				reject(new Error('ACP 进程未启动'));
 				return;
 			}
 			const id = this.nextId++;
-			this.pending.set(id, { resolve, reject });
+			const p: Pending = { resolve, reject };
+			if (timeoutMs !== null) {
+				p.timer = window.setTimeout(() => {
+					this.pending.delete(id);
+					reject(new Error(`ACP 请求超时（${Math.round(timeoutMs / 1000)}s）：${method}`));
+				}, timeoutMs);
+			}
+			this.pending.set(id, p);
 			this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
 		});
 	}
@@ -260,7 +276,10 @@ export class AcpClient {
 	}
 
 	private failPending(e: Error): void {
-		for (const p of this.pending.values()) p.reject(e);
+		for (const p of this.pending.values()) {
+			if (p.timer !== undefined) window.clearTimeout(p.timer);
+			p.reject(e);
+		}
 		this.pending.clear();
 	}
 
@@ -276,7 +295,8 @@ export class AcpClient {
 	/** 发送一轮对话（content blocks：text / image{data,mimeType}），resolve 值为 stopReason */
 	async prompt(sessionId: string, prompt: Array<Record<string, unknown>>): Promise<string> {
 		await this.ensureStarted();
-		const r = (await this.request('session/prompt', { sessionId, prompt })) as { stopReason: string };
+		// 整轮可长跑：不设 RPC 超时（传 null），无响应由视图层 watchdog 兜底
+		const r = (await this.request('session/prompt', { sessionId, prompt }, null)) as { stopReason: string };
 		return r.stopReason;
 	}
 

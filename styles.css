@@ -761,6 +761,11 @@ body.theme-light .codem-chat-root {
 .codem-chat-light.is-done {
 	background: var(--color-green);
 }
+/* v0.4.0：error 态（红）——失败/长时间无响应强制收尾不再复用 done，炸了一眼可辨 */
+.codem-chat-light.is-error {
+	background: var(--color-red);
+	box-shadow: 0 0 6px var(--color-red);
+}
 @keyframes codem-light-blink {
 	50% {
 		opacity: 0.35;

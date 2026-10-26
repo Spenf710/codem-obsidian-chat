@@ -37,6 +37,8 @@ const SEG_COLLAPSE_LIMIT = 20000;
 const DIFF_MAX_LINES = 200;
 /** 只读工具白名单：权限请求命中即自动批准（settings.readonlyAutoApprove 可关）；按工具名小写包含匹配 */
 const READONLY_TOOLS = ['read_files', 'grep', 'glob', 'list_dir', 'skill', 'web_search', 'web_fetch', 'tool_search'];
+/** 审批看门狗：权限条 5 分钟无人响应自动拒绝（回 decline + UI 留痕），不再永久挂死一轮 */
+const PERM_WATCHDOG_MS = 300_000;
 
 interface ToolCard {
 	detailsEl: HTMLDetailsElement;
@@ -63,6 +65,21 @@ interface TextSeg {
 	plainNode: Text | null;
 }
 
+/** 一个未决的权限审批请求：看门狗与轮末回收的登记项 */
+interface PermRequest {
+	/** 审批条 DOM（留痕用，回收后变灰保留不删除） */
+	bar: HTMLElement;
+	toolCallId?: string;
+	/** 回传给 agent 的应答函数（allow/reject/cancelled） */
+	respond: (result: unknown) => void;
+	/** 5 分钟看门狗定时器 */
+	timer: number;
+	/** 已应答标记：防止超时与用户点击双重应答 */
+	answered: boolean;
+	/** 拒绝选项 id（自动拒绝首选）；无 reject 选项时回 cancelled */
+	rejectOptionId?: string;
+}
+
 /** 一轮对话的渲染句柄（onUpdate 回调据此路由到当前消息块） */
 interface RenderState {
 	aiBlock: HTMLElement;
@@ -76,6 +93,8 @@ interface RenderState {
 	cards: Map<string, ToolCard>;
 	/** 早于 tool_call 通知到达的权限条暂存（toolCallId → 条目），卡片创建时回挂 */
 	pendingPerms: Map<string, HTMLElement[]>;
+	/** 本轮未决的权限请求登记表（看门狗超时/停止回收的遍历对象） */
+	permRequests: PermRequest[];
 	/** 自动批准（yolo/只读白名单/记住授权）轮内聚合条（唯一，逐次更新计数，沉底不刷屏） */
 	yoloNote?: { el: HTMLElement; counts: Map<string, number>; total: number; labels: Set<string> };
 	/** 思考区增量 textNode：流式 thought chunk 只 appendData，避免 textContent += 每 chunk 全量重赋 */
@@ -94,7 +113,7 @@ interface PendingImage {
 /** 视图内会话 tab：独立会话/消息 DOM/流式状态，可并行执行（三色灯） */
 interface ChatTab {
 	id: number;
-	light: 'idle' | 'running' | 'done';
+	light: 'idle' | 'running' | 'done' | 'error';
 	sessionId: string | null;
 	pendingContext: string | null;
 	busy: boolean;
@@ -739,13 +758,13 @@ export class CodeMChatView extends ItemView {
 	}
 
 	/**
-	 * 三色灯：灰=静默 / 黄=执行中 / 绿=执行结束。
+	 * 状态灯：灰=静默 / 黄=执行中 / 绿=执行结束 / 红=失败（v0.4.0：失败不再复用 done）。
 	 * 同步两处：底部状态行 dot + tab 行（tab 行即状态面板）
 	 */
-	private setStatusLight(state: 'idle' | 'running' | 'done'): void {
+	private setStatusLight(state: 'idle' | 'running' | 'done' | 'error'): void {
 		this.activeTab.light = state;
 		if (this.lightEl) {
-			this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
+			this.lightEl.removeClass('is-idle', 'is-running', 'is-done', 'is-error');
 			this.lightEl.addClass('is-' + state);
 		}
 		this.renderTabs();
@@ -922,17 +941,19 @@ export class CodeMChatView extends ItemView {
 				tab.turnSeq++;
 				if (tab.sessionId) this.client?.cancelSession(tab.sessionId);
 				this.stopTypewriter(tab);
+				// 强制收尾前回收挂起审批（服务端还在等应答）；长时间无响应按失败置灯，不再复用 done
+				if (tab.current) this.recyclePerms(tab.current, '（本轮长时间无响应，已自动拒绝）');
 				tab.current = null;
 				tab.busy = false;
-				tab.light = 'done';
+				tab.light = 'error';
 				tab.scrollEl
 					.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
 					.setText('⏱ 本轮长时间无响应，已自动结束显示；若 CodeM 仍在后台执行，结果可能稍后出现。');
 				this.renderTabs();
 				this.syncStopUi();
 				if (this.lightEl) {
-					this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
-					this.lightEl.addClass('is-' + (tab === this.activeTab ? 'done' : tab.light));
+					this.lightEl.removeClass('is-idle', 'is-running', 'is-done', 'is-error');
+					this.lightEl.addClass('is-' + (tab === this.activeTab ? 'error' : tab.light));
 				}
 				this.scrollBottom(tab.scrollEl);
 			}
@@ -948,6 +969,7 @@ export class CodeMChatView extends ItemView {
 		tab.current = st;
 		tab.mdBuffer = '';
 		tab.displayLen = 0;
+		let turnFailed = false; // 失败标记：finally 据此把灯设为 error（此前失败也显示绿色 done）
 
 		try {
 			const client = await this.ensureClient();
@@ -983,6 +1005,7 @@ export class CodeMChatView extends ItemView {
 				void this.generateTitle(tab, rawPrompt);
 			}
 		} catch (e) {
+			turnFailed = true;
 			this.stopTypewriter(tab);
 			const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
 			try {
@@ -1012,12 +1035,13 @@ export class CodeMChatView extends ItemView {
 			window.clearInterval(watchdog);
 			tab.current = null;
 			tab.busy = false;
-			tab.light = 'done';
+			const finalLight: 'done' | 'error' = turnFailed ? 'error' : 'done';
+			tab.light = finalLight;
 			this.renderTabs();
 			this.syncStopUi(); // 复位停止按钮与"执行中…"输入框提示（手动改灯绕过了 setStatusLight）
 			if (this.lightEl) {
-				this.lightEl.removeClass('is-idle', 'is-running', 'is-done');
-				this.lightEl.addClass('is-' + (tab === this.activeTab ? 'done' : tab.light));
+				this.lightEl.removeClass('is-idle', 'is-running', 'is-done', 'is-error');
+				this.lightEl.addClass('is-' + (tab === this.activeTab ? finalLight : tab.light));
 			}
 			this.scrollBottom(tab.scrollEl);
 			// 消费排队中的下一条消息
@@ -1048,23 +1072,9 @@ export class CodeMChatView extends ItemView {
 		} else {
 			st.thinking.hide();
 		}
-		// 兜底：轮结束仍无对应卡片的权限条（plan 批准等无 tool_call 的请求）落回正文末尾，不丢信息；
-		// 停止的轮次权限请求已随轮作废，直接清掉（按钮点击也不会再有响应）
-		if (st.pendingPerms.size) {
-			if (!stopped) {
-				for (const list of st.pendingPerms.values()) {
-					for (const el of list) {
-				if (el.dataset.answered === '1') continue; // 已响应的条不复活
-			// 轮已结束：该请求已无法被 agent 处理，按钮置灰防误点，信息保留可见
-			el.addClass('codem-chat-perm-expired');
-		el.querySelectorAll('button').forEach((b) => ((b as HTMLButtonElement).disabled = true));
-		     el.createSpan({ text: '（本轮已结束，未处理）', cls: 'codem-chat-perm-expired-note' });
-		     st.aiBlock.appendChild(el);
-		    }
-		   }
-		  }
-		  st.pendingPerms.clear();
-		 }
+		// 轮末回收：未决审批统一回拒绝应答（服务端在等答复，不回会挂死这一轮），条目留痕不静默消失
+		this.recyclePerms(st, stopped ? '（本轮已停止，未处理）' : '（本轮已结束，未处理）');
+		st.pendingPerms.clear();
 		// 轮末统计条：耗时与工具次数（CodeM 不发 token 用量，改用可观测指标）
 		if (!stopped) {
 			const secs = Math.max(1, Math.round((Date.now() - st.turnStart) / 1000));
@@ -1225,7 +1235,7 @@ export class CodeMChatView extends ItemView {
 		const thinkingSummary = thinking.createEl('summary', { text: '思考中…' });
 		const thinkingBody = thinking.createDiv({ cls: 'codem-chat-thinking-body' });
 		this.scrollBottom();
-		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map(), thinkNode: null, turnStart: Date.now(), toolCount: 0 };
+		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map(), permRequests: [], thinkNode: null, turnStart: Date.now(), toolCount: 0 };
 	}
 
 	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
@@ -1634,46 +1644,47 @@ export class CodeMChatView extends ItemView {
 		}
 		const bar = createEl('div', { cls: 'codem-chat-perm' });
 		bar.createSpan({ text: `🔒 ${toolName}` });
+		// 登记为未决请求：按钮应答/看门狗超时/轮末回收统一走 settle/expire，防双重应答
+		const pr: PermRequest = {
+			bar,
+			toolCallId: toolCall?.toolCallId,
+			respond,
+			timer: 0,
+			answered: false,
+			rejectOptionId: reject?.optionId,
+		};
 		// 权限三档：Allow once / Allow for this session / Reject（自然语义，排开三个醒目按钮）
 		if (allowOnce) {
-			bar.createEl('button', { text: 'Allow once' }).onclick = () => {
-				bar.dataset.answered = '1';
-				this.prunePending(st, toolCall?.toolCallId, bar);
-				respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
-				bar.remove();
-			};
+			bar.createEl('button', { text: 'Allow once' }).onclick = () =>
+				this.settlePermRequest(st, pr, { outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
 		}
 		if (allowAlways) {
 			bar.createEl('button', { text: 'Allow for this session' }).onclick = () => {
-				bar.dataset.answered = '1';
 				if (!this.rememberedPerms) this.rememberedPerms = new Map();
 				const s = this.rememberedPerms.get(toolName) ?? new Set();
-				s.add('allow_always');
+					s.add('allow_always');
 				this.rememberedPerms.set(toolName, s);
-				this.prunePending(st, toolCall?.toolCallId, bar);
-				respond({ outcome: { outcome: 'selected', optionId: allowAlways.optionId } });
-				bar.remove();
+				this.settlePermRequest(st, pr, { outcome: { outcome: 'selected', optionId: allowAlways.optionId } });
 			};
 		}
 		if (reject) {
-			bar.createEl('button', { text: 'Reject' }).onclick = () => {
-				bar.dataset.answered = '1';
-				this.prunePending(st, toolCall?.toolCallId, bar);
-				respond({ outcome: { outcome: 'selected', optionId: reject.optionId } });
-				bar.remove();
-			};
+			bar.createEl('button', { text: 'Reject' }).onclick = () =>
+				this.settlePermRequest(st, pr, { outcome: { outcome: 'selected', optionId: reject.optionId } });
 		}
 		// 一键开启 yolo 并批准备次请求：底部 YOLO 按钮不显眼，逐条审批时最容易够到的开关
 		if (allowOnce) {
 			const autoAll = bar.createEl('button', { text: '🤖 后续全自动', cls: 'codem-chat-perm-yolo' });
 			autoAll.onclick = () => {
 				if (!this.yolo) this.toggleYolo();
-				bar.dataset.answered = '1';
-				this.prunePending(st, toolCall?.toolCallId, bar);
-				respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
-				bar.remove();
+				this.settlePermRequest(st, pr, { outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
 			};
 		}
+		// 审批看门狗：5 分钟无人响应自动拒绝并留痕——审批条不再永久挂死一轮（用户不在电脑前时服务端会一直等）
+		st.permRequests.push(pr);
+		pr.timer = window.setTimeout(
+			() => this.expirePermRequest(st, pr, '（审批超时 5 分钟，已自动拒绝）'),
+			PERM_WATCHDOG_MS
+		);
 		park(bar);
 		// 权限条落在发起 tab 的时间线里：当前正看别的 tab 时给导航提示，否则用户不知道要去哪确认
 		if (tab !== this.activeTab) {
@@ -1693,6 +1704,41 @@ export class CodeMChatView extends ItemView {
 				if (!list.length) st.pendingPerms.delete(toolCallId);
 			}
 		}
+	}
+
+	/** 权限应答统一出口（用户点击按钮）：防双重应答、清看门狗、摘暂存、移除条目 */
+	private settlePermRequest(st: RenderState, pr: PermRequest, result: unknown): void {
+		if (pr.answered) return;
+		pr.answered = true;
+		window.clearTimeout(pr.timer);
+		const idx = st.permRequests.indexOf(pr);
+		if (idx >= 0) st.permRequests.splice(idx, 1);
+		this.prunePending(st, pr.toolCallId, pr.bar);
+		pr.respond(result);
+		pr.bar.remove();
+	}
+
+	/** 看门狗超时/轮末回收：自动回拒绝应答（无 reject 选项则 cancelled），条目留痕不静默消失 */
+	private expirePermRequest(st: RenderState, pr: PermRequest, note: string): void {
+		if (pr.answered) return;
+		pr.answered = true;
+		window.clearTimeout(pr.timer);
+		const idx = st.permRequests.indexOf(pr);
+		if (idx >= 0) st.permRequests.splice(idx, 1);
+		this.prunePending(st, pr.toolCallId, pr.bar);
+		pr.respond(
+			pr.rejectOptionId
+				? { outcome: { outcome: 'selected', optionId: pr.rejectOptionId } }
+				: { outcome: { outcome: 'cancelled' } }
+		);
+		pr.bar.addClass('codem-chat-perm-expired');
+		pr.bar.querySelectorAll('button').forEach((b) => ((b as HTMLButtonElement).disabled = true));
+		pr.bar.createSpan({ text: note, cls: 'codem-chat-perm-expired-note' });
+	}
+
+	/** 批量回收全部未决审批（停止/轮末/看门狗强制收尾时） */
+	private recyclePerms(st: RenderState, note: string): void {
+		for (const pr of [...st.permRequests]) this.expirePermRequest(st, pr, note);
 	}
 
 	// ===== 内联候选（/ 技能、@ 文件/文件夹） =====
