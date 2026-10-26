@@ -1338,21 +1338,24 @@ button.codem-chat-stop.codem-chat-chip:disabled {
 	}
 }
 /* v0.6.1 细节补齐：权限彩色图标 / Plan 图标 / 信息行会话标题 */
-.codem-chat-chip-icon {
-	flex: 0 0 auto;
-	display: inline-flex;
-	align-items: center;
-}
-.codem-chat-chip-icon svg,
-.codem-chat-plan-icon svg {
-	width: 14px;
-	height: 14px;
-}
-/* Plan 图标：淡橙（叶部式彩色锚点，未激活态不再是"禁用感"纯灰） */
+/* v0.6.3：图标容器固定 16px 满高居中（用户反馈第一个 chip 视觉偏低：
+   图标 14px 大于文字行高 + sparkles 图标底部小圆点下探超出文字基线，造成重心错位感），svg 缩到 13px 贴文字 */
+.codem-chat-chip-icon,
 .codem-chat-plan-icon {
 	flex: 0 0 auto;
 	display: inline-flex;
 	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+}
+.codem-chat-chip-icon svg,
+.codem-chat-plan-icon svg {
+	width: 13px;
+	height: 13px;
+}
+/* Plan 图标：淡橙（叶部式彩色锚点，未激活态不再是"禁用感"纯灰） */
+.codem-chat-plan-icon {
 	color: var(--codem-tool-bash);
 }
 button.codem-chat-chip.codem-chat-plan.is-active .codem-chat-plan-icon {

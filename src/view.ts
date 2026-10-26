@@ -955,7 +955,7 @@ export class CodeMChatView extends ItemView {
 		};
 		const icons: Record<'manual' | 'smart' | 'yolo', string> = {
 			manual: 'lock',
-			smart: 'sparkles',
+			smart: 'star', // v0.6.3：sparkles 换 star——五角星上下对称重心居中，消除底部圆点下探的错位感
 			yolo: 'zap',
 		};
 		const iconColors: Record<'manual' | 'smart' | 'yolo', string> = {
