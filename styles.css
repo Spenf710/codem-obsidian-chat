@@ -1084,3 +1084,100 @@ body.theme-light .codem-chat-root {
 	color: var(--text-success);
 	border-color: rgba(var(--color-green-rgb), 0.4);
 }
+
+/* —— v0.5.0 UI 对标叶版：拖拽高亮 / 工具卡配色 / 代码块装饰 / 双列 diff / 审批横幅 / 运行读数 —— */
+
+/* 拖拽图片：输入区高亮 */
+.codem-chat-inputwrap.is-dragover {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb, 0, 102, 204), 0.25);
+}
+/* 工具卡分类配色：图标按类别着色 */
+.codem-chat-tool.cat-bash .codem-chat-tool-icon { color: var(--text-warning, #e67e22); }
+.codem-chat-tool.cat-edit .codem-chat-tool-icon { color: var(--text-success, #2ecc71); }
+.codem-chat-tool.cat-search .codem-chat-tool-icon { color: var(--text-accent, #3498db); }
+.codem-chat-tool.cat-web .codem-chat-tool-icon { color: #9b59b6; }
+/* 写操作风险徽章 */
+.codem-chat-tool-risk {
+	flex-shrink: 0;
+	font-size: 10px;
+	padding: 0 4px;
+	border-radius: 4px;
+	color: var(--text-warning, #e67e22);
+	background: rgba(230, 126, 34, 0.12);
+	user-select: none;
+}
+/* 代码块语言标签 + 复制按钮（hover 显现） */
+.markdown-rendered pre { position: relative; }
+.codem-chat-code-tools {
+	position: absolute;
+	top: 4px;
+	right: 6px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 10px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+	user-select: none;
+	z-index: 2;
+}
+.markdown-rendered pre:hover .codem-chat-code-tools { opacity: 1; }
+.codem-chat-code-lang {
+	color: var(--text-faint);
+	font-family: var(--font-monospace);
+	text-transform: lowercase;
+}
+button.codem-chat-code-copy {
+	appearance: none;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: 0 2px;
+	font-size: 11px;
+}
+button.codem-chat-code-copy:hover { color: var(--text-normal); }
+/* 双列 diff：左删除侧 / 右新增侧 */
+.codem-chat-diff-row { display: flex; }
+.codem-chat-diff-cell {
+	flex: 1 1 50%;
+	display: flex;
+	min-width: 0;
+	padding: 0 4px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+}
+.codem-chat-diff-cell + .codem-chat-diff-cell { border-inline-start: 1px solid var(--background-modifier-border); }
+.codem-chat-diff-cell.is-del { background: rgba(var(--color-red-rgb), .12); color: var(--text-error); }
+.codem-chat-diff-cell.is-ins { background: rgba(var(--color-green-rgb), .12); color: var(--text-success); }
+.codem-chat-diff-cell.is-ctx { color: var(--text-muted); }
+.codem-chat-diff-cell.is-empty { background: var(--background-secondary); }
+/* 审批等待横幅（消息区顶部常驻，sticky 跟随） */
+.codem-chat-perm-banner {
+	position: sticky;
+	top: 0;
+	z-index: 5;
+	padding: 6px 10px;
+	margin-bottom: 6px;
+	font-size: var(--font-ui-small);
+	color: var(--text-warning, #e67e22);
+	background: var(--background-secondary);
+	border: 1px solid rgba(230, 126, 34, 0.4);
+	border-radius: 6px;
+}
+/* 运行读数（轮次头部实时计时） */
+.codem-chat-live {
+	font-size: 10px;
+	color: var(--text-faint);
+	margin-bottom: 4px;
+	user-select: none;
+}
+/* 工具失败归类提示 */
+.codem-chat-tool-error {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-error);
+	padding: 2px 0;
+}

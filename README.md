@@ -13,7 +13,8 @@ Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat. Your vault
 - **`/` skills**: lists CodeM and local skills, searchable by Chinese description
 - **`@` references**: fuzzy search or drill-down browse; `[[note]]` and `[[folder]]` contents are injected into context
 - **Image paste**: paste screenshots from the clipboard (base64 inline, decoded by CodeM)
-- **YOLO mode**: one-click auto-approval of tool permission requests
+- **Permission modes**: 🔒 manual / ✨ smart (auto-approve read-only tools) / 🤖 YOLO — one-click switch at the composer
+- **Input history & drop**: recall the last 50 prompts with ↑/↓ in an empty input, Ctrl/Cmd+Enter to send, drag-and-drop images
 - **Turn navigation**: floating buttons jump between user turns in long conversations
 
 ## Prerequisites
@@ -66,22 +67,22 @@ npm run build   # production build
 - [ ] **队列面板化**：inputQueue 已有数据结构，补 UI——输入框上方全量列表 + 逐条编辑/删除 + 上限 8 条
 - [ ] **命令前缀授权记忆**：按"前两个词"记（如 npm install），比按工具名记忆细一档
 
-### 输入框 UI 对标叶版（P1.5）
+### 输入框 UI 对标叶版（P1.5）✅ 已完成（v0.5.0，2026-10-26）
 
-- [ ] **输入历史 ↑↓**：输入框空白时调取最近 50 条 prompt
-- [ ] **Cmd/Ctrl+Enter 发送**：Shift+Enter 换行（现仅 Enter 发送）
-- [ ] **图片拖拽上传**：现只有粘贴
-- [ ] **权限模式 chip**：输入框下方行内切换档位（现只有底部 YOLO 按钮）
+- [x] **输入历史 ↑↓**：输入框空白时调取最近 50 条 prompt（本次会话内有效）
+- [x] **Cmd/Ctrl+Enter 发送**：Enter 仍发送、Shift+Enter 换行
+- [x] **图片拖拽上传**：拖入输入区即预览（原来仅粘贴）
+- [x] **权限模式 chip**：底部按钮一键循环 🔒手动 / ✨智能（只读自动）/ 🤖YOLO；设置项改为初始档位
 
-### 输出界面对标叶版（P1.5）
+### 输出界面对标叶版（P1.5）✅ 除消息操作行外已完成（v0.5.0）
 
-- [ ] **工具卡分类配色**：按工具类型（Bash/Edit/Search/Web）分色 + 风险徽章（现全部同色）
-- [ ] **代码块语言标签 + 复制按钮**
-- [ ] **diff 双列视图**：现单列行级 diff 升级为 +/- 双列
-- [ ] **消息 hover 操作行**：复制/编辑重发/重新生成
-- [ ] **运行读数**：内联运行时长 + 180s 转"疑似卡住"（区分等审批与真卡死）
-- [ ] **审批等待横幅 + 后台通知**：切走 Tab 也能收到
-- [ ] **工具失败归类**：exit 127/126/124 人话化 + stderr 首行前置
+- [x] **工具卡分类配色**：bash/edit/search/web 图标分色 + 写操作「⚠ 可写」徽章
+- [x] **代码块语言标签 + 复制按钮**（hover 显现）
+- [x] **diff 双列视图**：左删除侧/右新增侧，ctx 双列同显
+- [ ] **消息 hover 操作行**：复制/编辑重发/重新生成（留待下轮，涉及轮次截断逻辑）
+- [x] **运行读数**：轮次头部实时计时，180s 无响应转「⚠ 长时间无响应」
+- [x] **审批等待横幅**：消息区顶部常驻「⏸ 等待你批准」，应答/超时后移除（后台 Tab 另有 Notice）
+- [x] **工具失败归类**：exit 127/126/124 人话化置顶提示
 
 ### 工程方法（随版本持续）
 
@@ -101,4 +102,5 @@ npm run build   # production build
 
 ## 致谢
 
-布局与交互设计参考 Claudian（Obsidian AI 对话插件）的设计思路：侧边栏对话视图、多会话 Tab、流式渲染。
+- 布局与交互设计参考 Claudian（Obsidian AI 对话插件）的设计思路：侧边栏对话视图、多会话 Tab、流式渲染。
+- **叶葳（叶部）**：v0.5.0 的 UI 对标主要参考其 CodeM Chat v1.19.2 分享包——输入框交互（输入历史 / Ctrl+Enter / 拖拽图片 / 权限模式三档）与输出界面（工具卡分类配色 / 代码块装饰 / 双列 diff / 运行读数 / 审批横幅 / 失败归类）的设计与实测结论，已列入合作作者。

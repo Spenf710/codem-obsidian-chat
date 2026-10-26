@@ -120,8 +120,8 @@ export class CodeMSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('只读工具自动批准')
-			.setDesc('白名单工具（read_files / grep / glob / list_dir / skill / web_search / web_fetch / tool_search）的权限请求自动批准并聚合显示，不再逐条弹窗')
+			.setName('初始权限模式')
+			.setDesc('决定聊天框启动时的权限档位：开=✨智能（白名单只读工具自动批准），关=🔒手动；聊天框底部按钮可随时切换 🔒手动 / ✨智能 / 🤖YOLO')
 			.addToggle((tg) =>
 				tg.setValue(this.plugin.settings.readonlyAutoApprove).onChange(async (v) => {
 					this.plugin.settings.readonlyAutoApprove = v;
