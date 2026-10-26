@@ -377,16 +377,13 @@ export class CodeMChatView extends ItemView {
 			cls: 'codem-chat-input',
 			attr: { placeholder: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）', rows: 3 },
 		});
+		// 工具栏（输入框内底部，只放可操作控件——叶部 v1.8.0 Composer 重排结构）
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
-		this.lightEl = bottomRow.createSpan({ cls: 'codem-chat-light is-idle' });
-		bottomRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
-		this.sidEl = bottomRow.createSpan({ cls: 'codem-chat-sid' });
-		// chip 行（v0.5.1 UI 对标叶版）：权限 / 智能 / 推理 / Plan，一行小胶囊控件
 		const chips = bottomRow.createDiv({ cls: 'codem-chat-chips' });
-		// 权限模式 chip：下拉菜单三选一（v0.5.2：紧凑短词 + ▾，与叶部同构）
-		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip' });
-		this.permLabelEl = this.permBtn.createSpan();
-		this.permBtn.createSpan({ cls: 'caret', text: '▾' });
+		// 权限模式 chip（v0.6.0 三段式：档位名 value + chevron，对齐叶部 chip 结构）
+		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-perm' });
+		this.permLabelEl = this.permBtn.createSpan({ cls: 'codem-chat-chip-value' });
+		this.permBtn.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		this.permBtn.setAttribute('aria-label', '权限模式：手动 / 智能 / YOLO，点击选择');
 		this.permBtn.onclick = (e) => {
 			const menu = new Menu();
@@ -403,25 +400,30 @@ export class CodeMChatView extends ItemView {
 			menu.showAtMouseEvent(e);
 		};
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
-		// 智能 chip：Intelligence 下拉（CLI --intelligence，low/medium/high/xhigh；跟随配置=不传）
-		this.buildOptChip(chips, '智能', 'hl-blue', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
-		// 推理 chip：Reasoning 下拉（CLI --reasoning-effort，上游原生值域；跟随配置=不传）
-		this.buildOptChip(chips, '推理', 'hl-orange', ['minimal', 'low', 'medium', 'high', 'max'], () => this.modelOpts.reasoning, (v) => (this.modelOpts.reasoning = v));
-		// Plan chip：只读工作模式开关（CLI --plan，与权限模式正交）
-		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip', text: 'Plan' });
+		// 智能 chip：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
+		this.buildOptChip(chips, '智能', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
+		// 推理 chip：label 语义橙（叶部 --codem-tool-bash）；CLI --reasoning-effort，跟随配置=不传
+		this.buildOptChip(chips, '推理', 'codem-chat-reasoning', ['minimal', 'low', 'medium', 'high', 'max'], () => this.modelOpts.reasoning, (v) => (this.modelOpts.reasoning = v));
+		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
+		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', text: 'Plan' });
 		planBtn.setAttribute('aria-label', 'Plan 模式：只读不写（新进程生效）');
 		planBtn.onclick = () => {
 			this.modelOpts.plan = !this.modelOpts.plan;
-			planBtn.toggleClass('is-on', this.modelOpts.plan);
+			planBtn.toggleClass('is-active', this.modelOpts.plan);
 			this.applyModelOpts();
 			new Notice(this.modelOpts.plan ? 'Plan 模式：只读不写，已按新参数重启 CodeM' : 'Plan 模式已关闭，已按新参数重启 CodeM', 3000);
 		};
 		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
-		// 停止按钮：仅执行中显示（同步见 setStatusLight → syncStopButton），与 ESC 等效
-		this.stopBtn = actions.createEl('button', { text: '⏹ 停止', cls: 'codem-chat-stop' });
+		// 停止按钮：常驻图标 chip，空闲禁用（叶部式，不再显示/隐藏）
+		this.stopBtn = actions.createEl('button', { text: '⏹', cls: 'codem-chat-stop codem-chat-chip' });
 		this.stopBtn.setAttribute('aria-label', '停止当前任务（Esc）');
-		this.stopBtn.hide();
+		this.stopBtn.disabled = true;
 		this.stopBtn.onclick = () => this.stopActiveTurn();
+		// 信息行（输入框下方，只放只读事实——叶部 v1.8.0：状态灯 + agent + 会话短码）
+		const infoRow = root.createDiv({ cls: 'codem-chat-info-row' });
+		this.lightEl = infoRow.createSpan({ cls: 'codem-chat-light is-idle' });
+		infoRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
+		this.sidEl = infoRow.createSpan({ cls: 'codem-chat-sid' });
 
 		this.bindInputEvents();
 		this.bindPaste();
@@ -855,10 +857,11 @@ export class CodeMChatView extends ItemView {
 		this.syncStopUi();
 	}
 
-	/** 停止按钮与输入框提示跟随当前 tab 执行状态（setStatusLight 是所有状态切换汇聚点） */
+	/** 停止按钮与输入框提示跟随当前 tab 执行状态（setStatusLight 是所有状态切换汇聚点）。
+	 *  v0.6.0：停止按钮常驻（叶部式），空闲为禁用态而非隐藏 */
 	private syncStopUi(): void {
 		if (!this.stopBtn) return;
-		this.stopBtn.toggle(this.activeTab.busy);
+		this.stopBtn.disabled = !this.activeTab.busy;
 		this.inputEl.placeholder = this.activeTab.busy
 			? '执行中…按 Esc 或点击「⏹ 停止」可中途停止'
 			: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）';
@@ -932,7 +935,7 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	/** 设置权限模式：底部 chip 文案/高亮同步（运行时态，初始值来自设置页） */
+	/** 设置权限模式：chip 文案/高亮同步（运行时态，初始值来自设置页）；YOLO 激活态（叶部式背景高亮） */
 	private setPermMode(mode: 'manual' | 'smart' | 'yolo'): void {
 		this.permMode = mode;
 		const labels: Record<'manual' | 'smart' | 'yolo', string> = {
@@ -941,20 +944,7 @@ export class CodeMChatView extends ItemView {
 			yolo: '🤖 YOLO',
 		};
 		this.permLabelEl?.setText(labels[mode]);
-		this.permBtn.toggleClass('is-on', mode === 'yolo');
-	}
-
-	/** 循环切换权限模式：手动 → 智能 → YOLO */
-	private cyclePermMode(): void {
-		const order: Array<'manual' | 'smart' | 'yolo'> = ['manual', 'smart', 'yolo'];
-		const next = order[(order.indexOf(this.permMode) + 1) % order.length];
-		this.setPermMode(next);
-		const tips: Record<'manual' | 'smart' | 'yolo', string> = {
-			manual: '手动：所有权限请求逐次确认',
-			smart: '智能：只读工具（读文件/搜索等）自动批准，其余逐次确认',
-			yolo: 'YOLO：全部权限自动批准，请谨慎使用',
-		};
-		new Notice(`权限模式：${tips[next]}`, 3000);
+		this.permBtn.toggleClass('is-active', mode === 'yolo');
 	}
 
 	/** 输入历史回溯：delta<0 上一条（从最近开始），delta>0 下一条，走到底恢复空输入 */
@@ -1019,25 +1009,26 @@ export class CodeMChatView extends ItemView {
 		};
 	}
 
-	/** 构建「标签 值 ▾」chip：点击弹菜单选值（v0.5.1 UI 对标叶版；空串 = 跟随配置不传参） */
+	/** 构建「标签 值 ▾」chip（v0.6.0 三段式对齐叶部：label 淡灰/语义色 + value 半粗 + chevron 淡显）；
+	 *  点击弹菜单选值，空串 = 跟随配置不传参 */
 	private buildOptChip(
 		host: HTMLElement,
 		label: string,
-		hlCls: string,
+		kindCls: string,
 		values: string[],
 		get: () => string,
 		set: (v: string) => void
 	): void {
-		const btn = host.createEl('button', { cls: 'codem-chat-chip' });
-		btn.createSpan({ cls: hlCls, text: label });
-		const valEl = btn.createSpan({ text: ' 跟随' });
-		btn.createSpan({ cls: 'caret', text: '▾' });
+		const btn = host.createEl('button', { cls: 'codem-chat-chip ' + kindCls });
+		btn.createSpan({ cls: 'codem-chat-chip-label', text: label });
+		const valEl = btn.createSpan({ cls: 'codem-chat-chip-value', text: '跟随' });
+		btn.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		btn.onclick = (e) => {
 			const menu = new Menu();
 			menu.addItem((mi) =>
 				mi.setTitle('跟随配置').setChecked(get() === '').onClick(() => {
 					set('');
-					valEl.setText(' 跟随');
+					valEl.setText('跟随');
 					this.applyModelOpts();
 				})
 			);
@@ -1045,7 +1036,7 @@ export class CodeMChatView extends ItemView {
 				menu.addItem((mi) =>
 					mi.setTitle(v).setChecked(get() === v).onClick(() => {
 						set(v);
-						valEl.setText(' ' + v);
+						valEl.setText(v);
 						this.applyModelOpts();
 					})
 				);

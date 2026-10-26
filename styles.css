@@ -1087,10 +1087,13 @@ body.theme-light .codem-chat-root {
 
 /* —— v0.5.0 UI 对标叶版：拖拽高亮 / 工具卡配色 / 代码块装饰 / 双列 diff / 审批横幅 / 运行读数 —— */
 
-/* 拖拽图片：输入区高亮 */
+/* 拖拽图片：输入区反馈（叶部式：dashed 边框 + inset 阴影 + 过渡） */
 .codem-chat-inputwrap.is-dragover {
 	border-color: var(--interactive-accent);
-	box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb, 0, 102, 204), 0.25);
+	border-style: dashed;
+	background: var(--background-modifier-hover);
+	box-shadow: 0 0 0 2px var(--interactive-accent) inset;
+	transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 /* 工具卡分类配色：图标按类别着色 */
 .codem-chat-tool.cat-bash .codem-chat-tool-icon { color: var(--text-warning, #e67e22); }
@@ -1182,45 +1185,133 @@ button.codem-chat-code-copy:hover { color: var(--text-normal); }
 	padding: 2px 0;
 }
 
-/* —— v0.5.1 输入框形态对标叶版：chip 行 + 会话短码 + 输入区可拖高 —— */
-
+/* —— v0.6.0 chip 行对齐叶部实现（学习其 styles.css 后复刻）：
+	 三段式 label(faint/语义色) + value(normal,500) + chevron(0.55,9px)，
+	 24px 统一高度、透明底、hover 只提亮文字；信息行移到输入框下方 —— */
+:root {
+	--codem-accent: #6366f1;
+	--codem-accent-2: #8b5cf6;
+	--codem-tool-bash: #f59e0b;
+}
 .codem-chat-chips {
 	display: flex;
-	flex-wrap: wrap;
+	flex-wrap: nowrap;
 	align-items: center;
-	gap: 4px;
+	gap: 2px;
 	flex: 1;
 	min-width: 0;
+	overflow: hidden;
 }
-/* v0.5.3：纯文字形态（用户反馈：不要按钮包裹）——无边框无背景，hover/开启只变文字色 */
-.codem-chat-chip {
+button.codem-chat-chip {
+	appearance: none;
 	display: inline-flex;
 	align-items: center;
-	gap: 3px;
-	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
-	padding: 0;
-	border: none;
+	gap: 4px;
+	min-width: 0;
+	height: 24px;
+	overflow: hidden;
+	padding: 0 7px;
+	border: 0;
+	border-radius: 6px;
 	background: transparent;
-	cursor: pointer;
-	line-height: 1.6;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-family: inherit;
+	font-size: var(--font-ui-smaller);
+	font-weight: normal;
+	line-height: 1;
 	white-space: nowrap;
+	cursor: pointer;
 }
-.codem-chat-chip:hover {
+button.codem-chat-chip:is(:hover, :focus-visible) {
 	color: var(--text-normal);
 }
-.codem-chat-chip.is-on {
-	color: var(--text-accent);
+button.codem-chat-chip:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
 }
-.codem-chat-chip .caret {
+.codem-chat-chip-label {
+	flex: 0 0 auto;
+	color: var(--text-faint);
+}
+.codem-chat-chip-value {
+	flex: 0 0 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--text-normal);
+	font-weight: 500;
+}
+.codem-chat-chip-chevron {
+	flex: 0 0 auto;
+	opacity: 0.55;
 	font-size: 9px;
-	opacity: 0.7;
+	line-height: 1;
 }
-.codem-chat-chip .hl-blue {
-	color: var(--text-accent);
+/* 语义色（叶部）：智能 = 品牌紫蓝，推理 = bash 橙 */
+.codem-chat-intelligence .codem-chat-chip-label {
+	color: var(--codem-accent);
 }
-.codem-chat-chip .hl-orange {
-	color: var(--text-warning, #e67e22);
+.codem-chat-reasoning .codem-chat-chip-label {
+	color: var(--codem-tool-bash);
+}
+/* toggle 类（权限 / Plan）：opacity 呼吸，激活时背景高亮（叶部式） */
+button.codem-chat-chip.codem-chat-perm,
+button.codem-chat-chip.codem-chat-plan {
+	opacity: 0.75;
+}
+button.codem-chat-chip.codem-chat-perm:is(:hover, :focus-visible),
+button.codem-chat-chip.codem-chat-plan:is(:hover, :focus-visible) {
+	opacity: 1;
+}
+button.codem-chat-chip.is-active {
+	opacity: 1;
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+button.codem-chat-chip.codem-chat-plan.is-active {
+	background: linear-gradient(135deg, var(--codem-accent) 0%, var(--codem-accent-2) 100%);
+	color: white;
+}
+/* 停止按钮：常驻图标 chip，空闲禁用（叶部式） */
+button.codem-chat-stop.codem-chat-chip {
+	justify-content: center;
+	flex: 0 0 auto;
+	box-sizing: border-box;
+	width: 26px;
+	height: 24px;
+	padding: 0;
+	color: var(--text-error);
+	font-size: 13px;
+}
+button.codem-chat-stop.codem-chat-chip:is(:hover, :focus-visible) {
+	background: var(--background-modifier-hover);
+	color: var(--text-error);
+}
+button.codem-chat-stop.codem-chat-chip:disabled {
+	background: transparent;
+	color: var(--text-faint);
+	opacity: 0.4;
+	cursor: default;
+}
+/* 信息行（输入框下方，只放只读事实——叶部 v1.8.0 Composer 重排） */
+.codem-chat-info-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	height: 24px;
+	margin: -4px 14px 10px;
+	padding: 0 2px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.codem-chat-info-row .codem-chat-light {
+	flex: 0 0 auto;
+}
+.codem-chat-info-row .codem-chat-agent {
+	white-space: nowrap;
+	flex: 0 0 auto;
 }
 /* 会话短码（✳ CodeM · 376d7c7d） */
 .codem-chat-sid {
@@ -1229,6 +1320,20 @@ button.codem-chat-code-copy:hover { color: var(--text-normal); }
 	margin-left: 2px;
 	user-select: none;
 	white-space: nowrap;
+}
+/* 容器查询降级（叶部式）：窄容器先隐 Plan，再隐 chip 标签 */
+.codem-chat-bottomrow {
+	container-type: inline-size;
+}
+@container (max-width: 300px) {
+	.codem-chat-plan {
+		display: none;
+	}
+}
+@container (max-width: 230px) {
+	.codem-chat-chip-label {
+		display: none;
+	}
 }
 /* 输入区高度可拖拽调节（叶版式 resize 手柄） */
 .codem-chat-input {
