@@ -339,7 +339,8 @@ body.theme-light .codem-chat-root {
 	width: 100%;
 	resize: vertical;
 	min-height: 60px;
-	font-size: var(--font-ui-small);
+	/* v0.6.2：占位/输入字号降到 smaller（用户反馈叶部字体更小），与 chip 行一致 */
+	font-size: var(--font-ui-smaller);
 	border: none;
 	background: transparent;
 	padding: 10px 12px 4px;
@@ -1301,7 +1302,8 @@ button.codem-chat-stop.codem-chat-chip:disabled {
 	gap: 10px;
 	min-width: 0;
 	height: 24px;
-	margin: -4px 14px 10px;
+	/* v0.6.2：移到输入框上方（用户反馈叶部位置在输入框上方） */
+	margin: 0 14px 8px;
 	padding: 0 2px;
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);

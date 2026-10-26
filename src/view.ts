@@ -365,6 +365,13 @@ export class CodeMChatView extends ItemView {
 		histBtn.addEventListener('mousedown', (e) => e.preventDefault());
 		histBtn.onclick = () => void this.toggleHistoryPanel();
 
+		// 信息行（输入框上方，只放只读事实——用户实测叶部位置在输入框上方，v0.6.2 修正）
+		const infoRow = root.createDiv({ cls: 'codem-chat-info-row' });
+		this.lightEl = infoRow.createSpan({ cls: 'codem-chat-light is-idle' });
+		infoRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
+		this.sidEl = infoRow.createSpan({ cls: 'codem-chat-sid' });
+		this.infoTitleEl = infoRow.createSpan({ cls: 'codem-chat-info-title is-empty' });
+
 		// 输入容器（圆角边框内：图片预览行 + textarea + 底部状态行）
 		this.inputWrapEl = root.createDiv({ cls: 'codem-chat-inputwrap' });
 		const inputWrap = this.inputWrapEl;
@@ -427,12 +434,6 @@ export class CodeMChatView extends ItemView {
 		this.stopBtn.setAttribute('aria-label', '停止当前任务（Esc）');
 		this.stopBtn.disabled = true;
 		this.stopBtn.onclick = () => this.stopActiveTurn();
-		// 信息行（输入框下方，只放只读事实——叶部 v1.8.0：状态灯 + agent + 会话短码）
-		const infoRow = root.createDiv({ cls: 'codem-chat-info-row' });
-		this.lightEl = infoRow.createSpan({ cls: 'codem-chat-light is-idle' });
-		infoRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
-		this.sidEl = infoRow.createSpan({ cls: 'codem-chat-sid' });
-		this.infoTitleEl = infoRow.createSpan({ cls: 'codem-chat-info-title is-empty' });
 
 		this.bindInputEvents();
 		this.bindPaste();
