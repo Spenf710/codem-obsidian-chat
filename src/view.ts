@@ -197,6 +197,10 @@ export class CodeMChatView extends ItemView {
 	private permBtn!: HTMLButtonElement;
 	/** 权限 chip 的文案 span（v0.5.2：紧凑短词 + ▾，与智能/推理 chip 同构） */
 	private permLabelEl: HTMLElement | null = null;
+	/** 权限 chip 的图标宿主（v0.6.1：lucide 彩色图标替代 emoji，对齐叶部锁形图标） */
+	private permIconEl: HTMLElement | null = null;
+	/** 信息行会话标题 span（v0.6.1：叶部 info-title，AI 标题/首问溢出省略） */
+	private infoTitleEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
@@ -375,13 +379,14 @@ export class CodeMChatView extends ItemView {
 		this.renderTabs();
 		this.inputEl = inputWrap.createEl('textarea', {
 			cls: 'codem-chat-input',
-			attr: { placeholder: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）', rows: 3 },
+			attr: { placeholder: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）', rows: 2 },
 		});
 		// 工具栏（输入框内底部，只放可操作控件——叶部 v1.8.0 Composer 重排结构）
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
 		const chips = bottomRow.createDiv({ cls: 'codem-chat-chips' });
 		// 权限模式 chip（v0.6.0 三段式：档位名 value + chevron，对齐叶部 chip 结构）
 		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-perm' });
+		this.permIconEl = this.permBtn.createSpan({ cls: 'codem-chat-chip-icon' });
 		this.permLabelEl = this.permBtn.createSpan({ cls: 'codem-chat-chip-value' });
 		this.permBtn.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		this.permBtn.setAttribute('aria-label', '权限模式：手动 / 智能 / YOLO，点击选择');
@@ -405,7 +410,10 @@ export class CodeMChatView extends ItemView {
 		// 推理 chip：label 语义橙（叶部 --codem-tool-bash）；CLI --reasoning-effort，跟随配置=不传
 		this.buildOptChip(chips, '推理', 'codem-chat-reasoning', ['minimal', 'low', 'medium', 'high', 'max'], () => this.modelOpts.reasoning, (v) => (this.modelOpts.reasoning = v));
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
-		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', text: 'Plan' });
+		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan' });
+		const planIcon = planBtn.createSpan({ cls: 'codem-chat-plan-icon' });
+		setIcon(planIcon, 'file-text');
+		planBtn.createSpan({ text: 'Plan' });
 		planBtn.setAttribute('aria-label', 'Plan 模式：只读不写（新进程生效）');
 		planBtn.onclick = () => {
 			this.modelOpts.plan = !this.modelOpts.plan;
@@ -424,6 +432,7 @@ export class CodeMChatView extends ItemView {
 		this.lightEl = infoRow.createSpan({ cls: 'codem-chat-light is-idle' });
 		infoRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
 		this.sidEl = infoRow.createSpan({ cls: 'codem-chat-sid' });
+		this.infoTitleEl = infoRow.createSpan({ cls: 'codem-chat-info-title is-empty' });
 
 		this.bindInputEvents();
 		this.bindPaste();
@@ -935,14 +944,29 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	/** 设置权限模式：chip 文案/高亮同步（运行时态，初始值来自设置页）；YOLO 激活态（叶部式背景高亮） */
+	/** 设置权限模式：图标+文案同步（v0.6.1：emoji 换 lucide 彩色图标，对齐叶部锁形图标）；YOLO 激活态背景高亮 */
 	private setPermMode(mode: 'manual' | 'smart' | 'yolo'): void {
 		this.permMode = mode;
 		const labels: Record<'manual' | 'smart' | 'yolo', string> = {
-			manual: '🔒 手动',
-			smart: '✨ 智能',
-			yolo: '🤖 YOLO',
+			manual: '手动',
+			smart: '智能',
+			yolo: 'YOLO',
 		};
+		const icons: Record<'manual' | 'smart' | 'yolo', string> = {
+			manual: 'lock',
+			smart: 'sparkles',
+			yolo: 'zap',
+		};
+		const iconColors: Record<'manual' | 'smart' | 'yolo', string> = {
+			manual: 'var(--codem-tool-bash)',
+			smart: 'var(--codem-accent)',
+			yolo: 'var(--text-success)',
+		};
+		if (this.permIconEl) {
+			this.permIconEl.empty();
+			setIcon(this.permIconEl, icons[mode]);
+			this.permIconEl.style.color = iconColors[mode];
+		}
 		this.permLabelEl?.setText(labels[mode]);
 		this.permBtn.toggleClass('is-active', mode === 'yolo');
 	}
@@ -1082,11 +1106,16 @@ export class CodeMChatView extends ItemView {
 		})();
 	}
 
-	/** 底部会话短码（叶版式 ✳ CodeM · 376d7c7d）：切 tab/新会话/载入历史时同步 */
+	/** 底部会话短码 + 会话标题（叶部 info-title：AI 标题/首问，ellipsis 溢出）：切 tab/新会话/载入历史/标题生成时同步 */
 	private updateSidEl(): void {
 		if (!this.sidEl) return;
 		const sid = this.activeTab.sessionId;
 		this.sidEl.setText(sid ? '· ' + sid.slice(0, 8) : '');
+		if (this.infoTitleEl) {
+			const title = sid ? (this.plugin.settings.sessionTitles[sid] ?? '') : '';
+			this.infoTitleEl.setText(title);
+			this.infoTitleEl.toggleClass('is-empty', !title);
+		}
 	}
 
 	private async ensureClient(): Promise<AcpClient> {

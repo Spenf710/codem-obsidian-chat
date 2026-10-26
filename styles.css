@@ -1335,9 +1335,44 @@ button.codem-chat-stop.codem-chat-chip:disabled {
 		display: none;
 	}
 }
-/* 输入区高度可拖拽调节（叶版式 resize 手柄） */
+/* v0.6.1 细节补齐：权限彩色图标 / Plan 图标 / 信息行会话标题 */
+.codem-chat-chip-icon {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+}
+.codem-chat-chip-icon svg,
+.codem-chat-plan-icon svg {
+	width: 14px;
+	height: 14px;
+}
+/* Plan 图标：淡橙（叶部式彩色锚点，未激活态不再是"禁用感"纯灰） */
+.codem-chat-plan-icon {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	color: var(--codem-tool-bash);
+}
+button.codem-chat-chip.codem-chat-plan.is-active .codem-chat-plan-icon {
+	color: white;
+}
+/* 信息行会话标题（叶部 info-title） */
+.codem-chat-info-title {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-faint);
+}
+.codem-chat-info-title.is-empty {
+	display: none;
+}
+/* 输入区高度可拖拽调节（叶版式 resize 手柄）；v0.6.1：原生 resizer 透明化（视觉突元修复）+ 高度回落 60px（叶部同款，避免上下失衡） */
 .codem-chat-input {
 	resize: vertical;
-	min-height: 3em;
+	min-height: 60px;
 	max-height: 40vh;
+}
+.codem-chat-input::-webkit-resizer {
+	background: transparent;
 }
