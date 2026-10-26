@@ -131,6 +131,8 @@ interface ChatTab {
 	images: PendingImage[];
 	/** 输入框草稿：切 tab 时隔离，未发送内容不跨会话串台 */
 	draft: string;
+	/** v0.9.0：最近一次已发送的 prompt（重新生成/错误重试用） */
+	lastPrompt: string;
 	/** v0.7.0（叶部式）：tab Pin 标记，置顶显示 */
 	pinned: boolean;
 	/** v0.7.0（叶部式）：用户自定义 tab 标题（双击重命名），null = 用默认序号 */
@@ -205,6 +207,8 @@ export class CodeMChatView extends ItemView {
 	private infoTitleEl: HTMLElement | null = null;
 	/** ctx-meter 用量指示 span（v0.7.0 叶部式：上下文窗口 token 占比估算） */
 	private ctxMeterEl: HTMLElement | null = null;
+	/** 队列面板（v0.8.0 叶部式：全量列表 + Steer + 清空 + 逐条编辑/删除/重排） */
+	private queueEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
@@ -381,6 +385,9 @@ export class CodeMChatView extends ItemView {
 		const inputWrap = this.inputWrapEl;
 		this.previewEl = inputWrap.createDiv({ cls: 'codem-chat-previews' });
 		this.previewEl.hide();
+		// v0.8.0（叶部式）：队列面板——输入区上方，排队消息全量可见可改可排
+		this.queueEl = inputWrap.createDiv({ cls: 'codem-chat-queue-panel' });
+		this.queueEl.hide();
 		this.suggestEl = inputWrap.createDiv({ cls: 'codem-suggest' });
 		this.suggestEl.hide();
 
@@ -740,6 +747,7 @@ export class CodeMChatView extends ItemView {
 			turnPos: 0,
 			images: [],
 			draft: '',
+			lastPrompt: '',
 			pinned: false,
 			label: null,
 			scrollEl: null as unknown as HTMLElement,
@@ -1192,6 +1200,79 @@ export class CodeMChatView extends ItemView {
 		return this.client;
 	}
 
+	// ===== v0.8.0（叶部式）队列面板：全量列表 + Steer + 清空 + 逐条编辑/删除/重排 =====
+
+	/** 渲染队列面板：排队消息全量可见，每条 ↑↓ ✎ ✕，面板级 Steer / 清空 */
+	private renderQueuePanel(): void {
+		if (!this.queueEl) return;
+		this.queueEl.empty();
+		if (!this.inputQueue.length) {
+			this.queueEl.hide();
+			return;
+		}
+		this.queueEl.show();
+		// 面板头：计数 + Steer + 清空
+		const head = this.queueEl.createDiv({ cls: 'codem-chat-queue-head' });
+		head.createSpan({ cls: 'codem-chat-queue-title', text: `已排队 ${this.inputQueue.length} 条` });
+		const headBtns = head.createDiv({ cls: 'codem-chat-queue-actions' });
+		// Steer：停止当前回合，队首立刻发出（cancel 后 finishTurn → finally 自动 shift 队首续发）
+		const steerBtn = headBtns.createEl('button', { text: '⚡ Steer', cls: 'codem-chat-queue-steer' });
+		steerBtn.setAttribute('aria-label', '停止当前任务并立刻发出队首消息');
+		steerBtn.onclick = () => {
+			if (!this.activeTab.busy || !this.inputQueue.length) return;
+			this.stopActiveTurn(); // cancel → reason='cancelled' → finally 不恢复（队列保留）→ shift 自动发队首
+		};
+		// 清空：全部排队项丢弃（不影响输入框当前草稿）
+		const clearBtn = headBtns.createEl('button', { text: '清空', cls: 'codem-chat-queue-discard' });
+		clearBtn.setAttribute('aria-label', '清空全部排队消息');
+		clearBtn.onclick = () => {
+			this.inputQueue = [];
+			this.renderQueuePanel();
+		};
+		// 逐条列表
+		const list = this.queueEl.createDiv({ cls: 'codem-chat-queue-list', attr: { role: 'list' } });
+		this.inputQueue.forEach((item, idx) => {
+			const row = list.createDiv({ cls: 'codem-chat-queue-item', attr: { role: 'listitem' } });
+			row.createSpan({ cls: 'codem-chat-queue-item-text', text: item.prompt.slice(0, 80) || '（图片）' });
+			const btns = row.createDiv({ cls: 'codem-chat-queue-item-actions' });
+			const mkBtn = (label: string, title: string, fn: () => void, disabled = false): void => {
+				const b = btns.createEl('button', { text: label, cls: 'codem-chat-queue-move' });
+				b.setAttribute('aria-label', title);
+				if (disabled) { (b as HTMLButtonElement).disabled = true; return; }
+				b.onclick = () => fn();
+			};
+			mkBtn('↑', '上移一位', () => {
+				if (idx <= 0) return;
+				const t = this.inputQueue[idx - 1];
+				this.inputQueue[idx - 1] = this.inputQueue[idx];
+				this.inputQueue[idx] = t;
+				this.renderQueuePanel();
+			}, idx === 0);
+			mkBtn('↓', '下移一位', () => {
+				if (idx >= this.inputQueue.length - 1) return;
+				const t = this.inputQueue[idx + 1];
+				this.inputQueue[idx + 1] = this.inputQueue[idx];
+				this.inputQueue[idx] = t;
+				this.renderQueuePanel();
+			}, idx === this.inputQueue.length - 1);
+			mkBtn('✎', '撤回输入框编辑', () => {
+				this.inputQueue.splice(idx, 1);
+				this.inputEl.value = (this.inputEl.value ? this.inputEl.value + '\n' : '') + item.prompt;
+				// 图片也回填到预览区
+				if (item.images.length) {
+					this.activeTab.images.push(...item.images);
+					this.renderPreviews();
+				}
+				this.renderQueuePanel();
+				this.inputEl.focus();
+			});
+			mkBtn('✕', '删除这一条', () => {
+				this.inputQueue.splice(idx, 1);
+				this.renderQueuePanel();
+			});
+		});
+	}
+
 	// ===== 发送与流式渲染 =====
 
 	private async send(): Promise<void> {
@@ -1206,6 +1287,7 @@ export class CodeMChatView extends ItemView {
 			this.inputEl.value = '';
 			tab.draft = '';
 			this.renderPreviews();
+			this.renderQueuePanel();
 			new Notice(`已排队（当前第 ${this.inputQueue.length} 条），稍后自动发送`);
 			return;
 		}
@@ -1216,6 +1298,7 @@ export class CodeMChatView extends ItemView {
 			if (this.promptHistory.length > 50) this.promptHistory.shift();
 		}
 		this.promptHistPos = -1;
+		tab.lastPrompt = rawPrompt; // v0.9.0：记录本轮 prompt，供重新生成/错误重试
 
 		const seq = ++tab.turnSeq; // 本轮序号：watchdog 强制收尾后，迟到的旧 finally 自动失效
 		tab.busy = true;
@@ -1281,6 +1364,7 @@ export class CodeMChatView extends ItemView {
 		tab.mdBuffer = '';
 		tab.displayLen = 0;
 		let turnFailed = false; // 失败标记：finally 据此把灯设为 error（此前失败也显示绿色 done）
+		let wasCancelled = false; // v0.8.0：停止时排队消息回填输入框而非自动续发（叶部式）
 		// 运行读数（v0.5.0）：1s 刷新实时耗时，180s 无响应转警示（区分长任务与卡死）
 		st.liveTimer = window.setInterval(() => {
 			if (!tab.busy) {
@@ -1318,12 +1402,23 @@ export class CodeMChatView extends ItemView {
 			if (seq !== tab.turnSeq) return;
 			// 用户中途停止（session/cancel）：已流出正文保留，时间线打停止标记
 			if (reason === 'cancelled') {
+				wasCancelled = true;
 				this.stopTypewriter(tab);
 				tab.scrollEl
 					.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
 					.setText('⏹ 已停止（本轮内容可能不完整）');
 			}
 			this.finishTurn(st, tab, reason === 'cancelled');
+		// v0.9.0（叶部式）：assistant 消息重新生成按钮 ↻
+		if (reason !== 'cancelled' && rawPrompt) {
+			const regenBtn = st.aiBlock.createEl('button', { cls: 'codem-chat-regen-btn', text: '↻ 重新生成' });
+			regenBtn.setAttribute('aria-label', '用同样的提问重新生成回复');
+			regenBtn.onclick = () => {
+				if (tab.busy) return;
+				this.inputEl.value = rawPrompt;
+				void this.send();
+			};
+		}
 			// 首轮结束后台生成会话标题（无头 -p 调用，静默失败）
 			if (tab.turnCount === 1 && tab.sessionId && !this.plugin.settings.sessionTitles[tab.sessionId]) {
 				void this.generateTitle(tab, rawPrompt);
@@ -1355,6 +1450,17 @@ export class CodeMChatView extends ItemView {
 			const det = errBlock.createEl('details', { cls: 'codem-chat-error-details' });
 			det.createEl('summary', { text: '查看详情' });
 			det.createDiv({ cls: 'codem-chat-error-raw', text: detail.slice(0, 2000) });
+			// v0.9.0（叶部式）：错误重试按钮——恢复上条 prompt 重发
+			const retryBtn = errBlock.createEl('button', { cls: 'codem-chat-error-retry', text: '↻ 重试' });
+			retryBtn.setAttribute('aria-label', '重试上一条消息');
+			retryBtn.onclick = () => {
+				if (tab.busy) return;
+				errBlock.remove();
+				userBlock.removeClass('codem-chat-undelivered');
+				userBlock.querySelector('.codem-chat-undelivered-note')?.remove();
+				this.inputEl.value = rawPrompt;
+				void this.send();
+			};
 		} finally {
 			// 本轮已被强制收尾接管（turnSeq 已推进）：跳过复位，防止破坏接管方状态
 			if (seq !== tab.turnSeq) {
@@ -1375,14 +1481,26 @@ export class CodeMChatView extends ItemView {
 			this.scrollBottom(tab.scrollEl);
 			// 消费排队中的下一条消息
 			if (this.inputQueue.length > 0) {
-				const next = this.inputQueue.shift()!;
-				// 如果当前不在发起排队的 tab 上，切回去再发
-				if (this.activeTab !== tab) this.switchTab(tab);
-				tab.images = next.images;
-				this.inputEl.value = next.prompt;
-				tab.draft = next.prompt;
-				this.renderPreviews();
-				window.setTimeout(() => void this.send(), 200);
+				if (wasCancelled) {
+					// v0.8.0（叶部式）：用户停止 → 排队消息回填输入框（不丢、可编辑），不自动续发
+					const next = this.inputQueue.shift()!;
+					if (this.activeTab !== tab) this.switchTab(tab);
+					tab.images = next.images;
+					this.inputEl.value = next.prompt;
+					tab.draft = next.prompt;
+					this.renderPreviews();
+				} else {
+					// 正常完成：自动发送下一条
+					const next = this.inputQueue.shift()!;
+					// 如果当前不在发起排队的 tab 上，切回去再发
+					if (this.activeTab !== tab) this.switchTab(tab);
+					tab.images = next.images;
+					this.inputEl.value = next.prompt;
+					tab.draft = next.prompt;
+					this.renderPreviews();
+					window.setTimeout(() => void this.send(), 200);
+				}
+				this.renderQueuePanel();
 			}
 		}
 	}
@@ -1470,6 +1588,23 @@ export class CodeMChatView extends ItemView {
 					copyBtn.setText('✅');
 					window.setTimeout(() => copyBtn.setText('📋'), 1500);
 				});
+			};
+		}
+		// v0.9.0（叶部式）：编辑回填 ✎ + 引用 ❝
+		if (text) {
+			const editBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-edit-btn', text: '✎' });
+			editBtn.setAttribute('aria-label', '编辑此消息（回填输入框）');
+			editBtn.onclick = (e) => {
+				e.stopPropagation();
+				this.inputEl.value = text;
+				this.inputEl.focus();
+			};
+			const quoteBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-quote-btn', text: '❝' });
+			quoteBtn.setAttribute('aria-label', '引用此消息');
+			quoteBtn.onclick = (e) => {
+				e.stopPropagation();
+				this.inputEl.value = (this.inputEl.value ? this.inputEl.value + '\n\n' : '') + '> ' + text.split('\n').join('\n> ') + '\n\n';
+				this.inputEl.focus();
 			};
 		}
 		for (const img of images) {
@@ -2405,12 +2540,26 @@ export class CodeMChatView extends ItemView {
 		this.inputEl.focus();
 	}
 
-	/** 输入内容实时过滤历史会话（按 AI 标题/首问子串） */
+	/** 输入内容实时过滤历史会话（按 AI 标题/首问子串）+ 归档过滤 + 4 种排序（v0.8.0 叶部式） */
 	private filterHistory(): void {
 		const q = this.inputEl.value.trim().toLowerCase();
-		this.histItems = q
-			? this.allCards.filter((c) => this.sessionTitle(c).toLowerCase().includes(q))
-			: this.allCards;
+		const archived = new Set(this.plugin.settings.archivedSessions ?? []);
+		const showArchived = this.plugin.settings.showArchivedSessions ?? false;
+		let items = this.allCards.filter((c) => {
+			if (!showArchived && archived.has(c.sessionId)) return false;
+			if (q && !this.sessionTitle(c).toLowerCase().includes(q)) return false;
+			return true;
+		});
+		// 排序
+		const sort = this.plugin.settings.sessionSort ?? 'recent';
+		const t = (c: SessionCard): number => new Date(c.lastTime).getTime();
+		switch (sort) {
+			case 'oldest': items = [...items].sort((a, b) => t(a) - t(b)); break;
+			case 'turns': items = [...items].sort((a, b) => b.userTurns - a.userTurns); break;
+			case 'title': items = [...items].sort((a, b) => this.sessionTitle(a).localeCompare(this.sessionTitle(b))); break;
+			default: items = [...items].sort((a, b) => t(b) - t(a)); break; // recent
+		}
+		this.histItems = items;
 		this.histIndex = 0;
 		this.renderHistoryPanel();
 	}
@@ -2427,15 +2576,101 @@ export class CodeMChatView extends ItemView {
 			this.histEl.createDiv({ cls: 'codem-hist-loading', text: '没有匹配的历史会话' });
 			return;
 		}
+		// v0.8.0 工具条：排序 + 分组 + 显示已归档（三个区域独立，改排序/分组时搜索框不失焦）
+		const toolbar = this.histEl.createDiv({ cls: 'codem-chat-hist-toolbar' });
+		// 排序循环按钮
+		const sortLabels: Record<string, string> = { recent: '最近', oldest: '最早', turns: '轮数', title: '标题' };
+		const sortBtn = toolbar.createEl('button', {
+			cls: 'codem-chat-hist-toolbtn',
+			text: `排序：${sortLabels[this.plugin.settings.sessionSort ?? 'recent']}`,
+		});
+		sortBtn.onclick = () => {
+			const order: Array<'recent' | 'oldest' | 'turns' | 'title'> = ['recent', 'oldest', 'turns', 'title'];
+			const cur = order.indexOf(this.plugin.settings.sessionSort ?? 'recent');
+			this.plugin.settings.sessionSort = order[(cur + 1) % order.length];
+			this.filterHistory();
+		};
+		// 分组开关
+		const groupBtn = toolbar.createEl('button', {
+			cls: 'codem-chat-hist-toolbtn' + (this.plugin.settings.sessionGroup ? ' is-on' : ''),
+			text: this.plugin.settings.sessionGroup ? '☑ 分组' : '☐ 分组',
+		});
+		groupBtn.onclick = () => {
+			this.plugin.settings.sessionGroup = !this.plugin.settings.sessionGroup;
+			this.renderHistoryPanel();
+		};
+		// 显示已归档开关
+		const archBtn = toolbar.createEl('button', {
+			cls: 'codem-chat-hist-toolbtn' + (this.plugin.settings.showArchivedSessions ? ' is-on' : ''),
+			text: this.plugin.settings.showArchivedSessions ? '☑ 归档' : '☐ 归档',
+		});
+		archBtn.onclick = () => {
+			this.plugin.settings.showArchivedSessions = !this.plugin.settings.showArchivedSessions;
+			this.filterHistory();
+		};
+		// 列表（分组 / 平铺）
+		const list = this.histEl.createDiv({ cls: 'codem-chat-hist-list' });
+		const archived = new Set(this.plugin.settings.archivedSessions ?? []);
+		const groupEnabled = this.plugin.settings.sessionGroup ?? true;
 		this.histIndex = Math.min(this.histIndex, this.histItems.length - 1);
-		this.histItems.forEach((c, i) => {
+		// 分组渲染：按 lastTime 分桶（今天/昨天/本周/更早）
+		if (groupEnabled) {
+			const now = new Date();
+			const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+			const yesterdayStart = todayStart - 86400000;
+			const weekStart = todayStart - 7 * 86400000;
+			const groups: Array<{ label: string; items: typeof this.histItems }> = [
+				{ label: '今天', items: [] },
+				{ label: '昨天', items: [] },
+				{ label: '本周', items: [] },
+				{ label: '更早', items: [] },
+			];
+			for (const c of this.histItems) {
+				const ts = new Date(c.lastTime).getTime();
+				if (ts >= todayStart) groups[0].items.push(c);
+				else if (ts >= yesterdayStart) groups[1].items.push(c);
+				else if (ts >= weekStart) groups[2].items.push(c);
+				else groups[3].items.push(c);
+			}
+			for (const g of groups) {
+				if (!g.items.length) continue;
+				list.createDiv({ cls: 'codem-chat-hist-group', text: g.label });
+				this.renderHistRows(list, g.items, archived);
+			}
+		} else {
+			this.renderHistRows(list, this.histItems, archived);
+		}
+		const active = this.histEl.querySelector('.codem-suggest-item.is-active');
+		active?.scrollIntoView({ block: 'nearest' });
+	}
+
+	/** 渲染历史会话行（含归档按钮），供分组/平铺两种模式复用 */
+	private renderHistRows(list: HTMLElement, items: SessionCard[], archived: Set<string>): void {
+		items.forEach((c) => {
+			const i = this.histItems.indexOf(c);
 			const src = c.source === 'bot' ? '飞书' : c.source === 'tui' ? '终端' : 'CLI';
 			const turnTxt = c.userTurns > 0 ? ` · ${c.userTurns}问` : '';
-			const row = this.histEl!.createDiv({ cls: 'codem-suggest-item' + (i === this.histIndex ? ' is-active' : '') });
+			const row = list.createDiv({ cls: 'codem-suggest-item' + (i === this.histIndex ? ' is-active' : '') });
 			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src}${turnTxt}` });
 			row.createSpan({ cls: 'codem-suggest-desc', text: this.sessionTitle(c) });
+			// v0.8.0 归档/恢复按钮：📦 归档 / ↩ 恢复
+			const archBtn = row.createEl('button', {
+				cls: 'codem-chat-hist-archbtn',
+				text: archived.has(c.sessionId) ? '↩' : '📦',
+			});
+			archBtn.setAttribute('aria-label', archived.has(c.sessionId) ? '取消归档' : '归档此会话');
+			archBtn.onclick = async (e) => {
+				e.stopPropagation();
+				const idx = this.plugin.settings.archivedSessions.indexOf(c.sessionId);
+				if (idx >= 0) {
+					this.plugin.settings.archivedSessions.splice(idx, 1); // 取消归档
+				} else {
+					this.plugin.settings.archivedSessions.push(c.sessionId); // 归档
+				}
+				await this.plugin.saveSettings();
+				this.filterHistory();
+			};
 			row.addEventListener('mousedown', (e) => e.preventDefault());
-			// 鼠标悬停即同步选中（灰框跟随鼠标）；只切 class 不重建列表，避免悬停元素被替换
 			row.addEventListener('mouseenter', () => {
 				if (this.histIndex === i) return;
 				this.histIndex = i;
@@ -2448,8 +2683,6 @@ export class CodeMChatView extends ItemView {
 				void this.loadHistory(c);
 			});
 		});
-		const active = this.histEl.querySelector('.codem-suggest-item.is-active');
-		active?.scrollIntoView({ block: 'nearest' });
 	}
 
 	private closeHistory(): void {

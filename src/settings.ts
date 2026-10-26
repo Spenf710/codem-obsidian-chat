@@ -30,6 +30,14 @@ export interface CodeMSettings {
 	contextWindowTokens: number;
 	/** 已记住的命令前缀白名单（如 "npm install"），同前缀命令自动放行 */
 	allowedCommandPrefixes: string[];
+	/** v0.8.0（叶部式）：已归档的会话 ID 列表，历史面板默认隐去 */
+	archivedSessions: string[];
+	/** v0.8.0：历史会话排序方式 */
+	sessionSort: 'recent' | 'oldest' | 'turns' | 'title';
+	/** v0.8.0：历史会话是否按时间分组（今天/昨天/本周/更早） */
+	sessionGroup: boolean;
+	/** v0.8.0：历史会话是否显示已归档 */
+	showArchivedSessions: boolean;
 }
 
 export const DEFAULT_SETTINGS: CodeMSettings = {
@@ -42,6 +50,10 @@ export const DEFAULT_SETTINGS: CodeMSettings = {
 	sessionTitles: {},
 	contextWindowTokens: 200000,
 	allowedCommandPrefixes: [],
+	archivedSessions: [],
+	sessionSort: 'recent',
+	sessionGroup: true,
+	showArchivedSessions: false,
 };
 
 export class CodeMSettingTab extends PluginSettingTab {

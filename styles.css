@@ -1520,3 +1520,219 @@ input.codem-chat-tab-rename-input {
 	color: var(--text-error);
 	padding: 2px 0;
 }
+
+/* —— v0.8.0（叶部式）队列面板：输入区上方，排队消息全量可见可改可排 —— */
+.codem-chat-queue-panel {
+	margin: 0 12px 6px;
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+.codem-chat-queue-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 0 2px 4px;
+}
+.codem-chat-queue-title {
+	font-size: var(--font-ui-smaller);
+	font-weight: 500;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+.codem-chat-queue-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+button.codem-chat-queue-steer,
+button.codem-chat-queue-discard {
+	appearance: none;
+	display: inline-flex;
+	align-items: center;
+	height: 22px;
+	padding: 0 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 5px;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	cursor: pointer;
+}
+button.codem-chat-queue-steer:hover {
+	color: var(--text-accent);
+	border-color: var(--interactive-accent);
+}
+button.codem-chat-queue-discard:hover {
+	color: var(--text-error);
+	border-color: var(--text-error);
+}
+.codem-chat-queue-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.codem-chat-queue-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 3px 4px;
+	border-radius: 4px;
+	background: var(--background-primary);
+}
+.codem-chat-queue-item-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-normal);
+}
+.codem-chat-queue-item-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex-shrink: 0;
+}
+button.codem-chat-queue-move {
+	appearance: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	cursor: pointer;
+}
+button.codem-chat-queue-move:hover:not(:disabled) {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+button.codem-chat-queue-move:disabled {
+	opacity: 0.3;
+	cursor: default;
+}
+
+/* —— v0.8.0（叶部式）历史面板增强：工具条 + 分组头 + 归档按钮 —— */
+.codem-chat-hist-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px 6px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	flex-shrink: 0;
+}
+button.codem-chat-hist-toolbtn {
+	appearance: none;
+	display: inline-flex;
+	align-items: center;
+	height: 22px;
+	padding: 0 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	cursor: pointer;
+}
+button.codem-chat-hist-toolbtn:hover {
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
+}
+button.codem-chat-hist-toolbtn.is-on {
+	color: var(--text-accent);
+	border-color: var(--interactive-accent);
+}
+.codem-chat-hist-list {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	overflow-y: auto;
+}
+.codem-chat-hist-group {
+	padding: 4px 10px 2px;
+	font-size: var(--font-ui-smaller);
+	font-weight: 500;
+	color: var(--text-faint);
+	user-select: none;
+}
+button.codem-chat-hist-archbtn {
+	appearance: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-faint);
+	font-size: 11px;
+	cursor: pointer;
+}
+button.codem-chat-hist-archbtn:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+/* —— v0.9.0（叶部式）消息操作按钮：编辑✎ / 引用❝ / 重新生成↻ / 错误重试 —— */
+/* 编辑和引用按钮：绝对定位在复制按钮左侧（hover 浮现，与复制按钮同款风格） */
+button.codem-chat-copy-btn.codem-chat-edit-btn {
+	right: 34px;
+}
+button.codem-chat-copy-btn.codem-chat-quote-btn {
+	right: 68px;
+}
+/* 重新生成按钮（assistant 消息底部，非 hover，始终可见） */
+button.codem-chat-regen-btn {
+	appearance: none;
+	display: inline-flex;
+	align-items: center;
+	height: 22px;
+	padding: 0 8px;
+	margin: 4px 0 2px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 5px;
+	background: transparent;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	cursor: pointer;
+}
+button.codem-chat-regen-btn:hover {
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
+}
+/* 错误重试按钮 */
+button.codem-chat-error-retry {
+	appearance: none;
+	display: inline-flex;
+	align-items: center;
+	height: 26px;
+	padding: 0 12px;
+	margin: 6px 0;
+	border: 1px solid rgba(var(--color-red-rgb), 0.4);
+	border-radius: 5px;
+	background: transparent;
+	color: var(--text-error);
+	font-size: var(--font-ui-small);
+	white-space: nowrap;
+	cursor: pointer;
+}
+button.codem-chat-error-retry:hover {
+	background: rgba(var(--color-red-rgb), 0.08);
+	border-color: var(--text-error);
+}
