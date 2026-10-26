@@ -4380,3 +4380,94 @@ button.codem-chat-copy-btn.codem-chat-edit-btn {
 button.codem-chat-copy-btn.codem-chat-quote-btn {
 	right: 68px;
 }
+
+/* ===== v1.0.1 工具卡保底样式（强制生效，防止叶部 CSS 选择器未命中） ===== */
+
+/* summary 行：flex 布局 + 图标 + 工具名 + 状态 */
+.codem-chat-root .codem-chat-tool > summary {
+	display: flex !important;
+	align-items: center !important;
+	gap: 8px !important;
+	padding: 4px 0 !important;
+	cursor: pointer !important;
+	list-style: none !important;
+	overflow: hidden !important;
+}
+.codem-chat-root .codem-chat-tool > summary::-webkit-details-marker {
+	display: none !important;
+}
+
+/* 图标：CSS ::before 伪元素按 is-* 分类渲染 */
+.codem-chat-root .codem-chat-tool > summary::before {
+	content: "🔧" !important;
+	font-size: 13px !important;
+	flex-shrink: 0 !important;
+	opacity: 0.8 !important;
+}
+.codem-chat-root .codem-chat-tool.is-bash > summary::before { content: "💻" !important; }
+.codem-chat-root .codem-chat-tool.is-edit > summary::before { content: "✏️" !important; }
+.codem-chat-root .codem-chat-tool.is-read > summary::before { content: "📄" !important; }
+.codem-chat-root .codem-chat-tool.is-search > summary::before { content: "🔍" !important; }
+.codem-chat-root .codem-chat-tool.is-web > summary::before { content: "🌐" !important; }
+.codem-chat-root .codem-chat-tool.is-other > summary::before { content: "⚙️" !important; opacity: 0.5 !important; }
+
+/* 工具名：monospace + 正常色 */
+.codem-chat-root .codem-chat-tool .codem-chat-tool-name {
+	font-family: var(--font-monospace) !important;
+	font-size: 13px !important;
+	font-weight: 400 !important;
+	color: var(--text-normal) !important;
+	white-space: nowrap !important;
+	flex-shrink: 0 !important;
+}
+
+/* 状态：data-status 驱动颜色 */
+.codem-chat-root .codem-chat-tool .codem-chat-tool-status {
+	font-family: var(--font-monospace) !important;
+	font-size: 13px !important;
+	margin-left: auto !important;
+	flex-shrink: 0 !important;
+	white-space: nowrap !important;
+}
+.codem-chat-root .codem-chat-tool .codem-chat-tool-status[data-status="completed"] {
+	color: var(--color-green, #4caf50) !important;
+}
+.codem-chat-root .codem-chat-tool .codem-chat-tool-status[data-status="failed"] {
+	color: var(--color-red, #e05252) !important;
+}
+.codem-chat-root .codem-chat-tool .codem-chat-tool-status[data-status="in_progress"] {
+	color: var(--text-accent) !important;
+}
+
+/* 内容区：左边线 + 缩进（Claudian 线程形态的视觉锚点） */
+.codem-chat-root .codem-chat-tool .codem-chat-tool-content {
+	padding: 4px 0 !important;
+	padding-inline-start: 16px !important;
+	margin-inline-start: 7px !important;
+	border-inline-start: 1px solid var(--background-modifier-border) !important;
+}
+
+/* 工具结果：monospace + 淡灰 + 限高滚动 */
+.codem-chat-root .codem-chat-tool .codem-chat-tool-content .codem-chat-tool-result {
+	max-height: 220px !important;
+	overflow: auto !important;
+	margin: 4px 0 !important;
+	padding: 0 !important;
+	white-space: pre-wrap !important;
+	word-break: break-word !important;
+	font-family: var(--font-monospace) !important;
+	font-size: 12px !important;
+	line-height: 1.4 !important;
+	color: var(--text-muted) !important;
+	background: transparent !important;
+	border-radius: 0 !important;
+}
+
+/* 工具入参（raw）：更淡 */
+.codem-chat-root .codem-chat-tool .codem-chat-tool-content .codem-chat-tool-raw {
+	margin: 2px 0 0 !important;
+	font-family: var(--font-monospace) !important;
+	font-size: 12px !important;
+	color: var(--text-faint) !important;
+	word-break: break-all !important;
+}
