@@ -131,6 +131,10 @@ interface ChatTab {
 	images: PendingImage[];
 	/** 输入框草稿：切 tab 时隔离，未发送内容不跨会话串台 */
 	draft: string;
+	/** v0.7.0（叶部式）：tab Pin 标记，置顶显示 */
+	pinned: boolean;
+	/** v0.7.0（叶部式）：用户自定义 tab 标题（双击重命名），null = 用默认序号 */
+	label: string | null;
 	scrollEl: HTMLElement;
 	/** 最近一次收到 CodeM 更新的时间（无响应看门狗用） */
 	lastActivity: number;
@@ -199,6 +203,8 @@ export class CodeMChatView extends ItemView {
 	private permLabelEl: HTMLElement | null = null;
 	/** 信息行会话标题 span（v0.6.1：叶部 info-title，AI 标题/首问溢出省略） */
 	private infoTitleEl: HTMLElement | null = null;
+	/** ctx-meter 用量指示 span（v0.7.0 叶部式：上下文窗口 token 占比估算） */
+	private ctxMeterEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
@@ -425,6 +431,9 @@ export class CodeMChatView extends ItemView {
 			this.applyModelOpts();
 			new Notice(this.modelOpts.plan ? 'Plan 模式：只读不写，已按新参数重启 CodeM' : 'Plan 模式已关闭，已按新参数重启 CodeM', 3000);
 		};
+		// v0.7.0（叶部式）：ctx-meter 上下文用量指示——按会话总字符量估算 token 占比
+		this.ctxMeterEl = chips.createSpan({ cls: 'codem-chat-ctx-text', text: '' });
+		this.ctxMeterEl.setAttribute('aria-label', '上下文窗口用量');
 		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
 		// 停止按钮：常驻图标 chip，空闲禁用（叶部式，不再显示/隐藏）；内容包 inner（v0.6.5 方案 F）
 		this.stopBtn = actions.createEl('button', { cls: 'codem-chat-stop codem-chat-chip', attr: { type: 'button' } });
@@ -731,6 +740,8 @@ export class CodeMChatView extends ItemView {
 			turnPos: 0,
 			images: [],
 			draft: '',
+			pinned: false,
+			label: null,
 			scrollEl: null as unknown as HTMLElement,
 			lastActivity: 0,
 			turnSeq: 0,
@@ -741,25 +752,61 @@ export class CodeMChatView extends ItemView {
 		return tab;
 	}
 
-	/** tab 行渲染：编号 + 三色灯 dot + 悬停 × 关闭，active 高亮 */
+	/** tab 行渲染（v0.7.0 叶部式增强）：Pin 置顶 + 双击重命名 + 消息计数徽章 + 三色灯 + 悬停 × 关闭 */
 	private renderTabs(): void {
 		const el = this.tabsEl;
 		el.empty();
-		this.tabs.forEach((tab, i) => {
-			const b = el.createEl('button', { cls: 'codem-chat-tab' + (tab === this.activeTab ? ' is-active' : '') });
+		// Pin 的 tab 排前面
+			const sorted = [...this.tabs].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+			sorted.forEach((tab) => {
+			const i = this.tabs.indexOf(tab);
+			const b = el.createEl('button', {
+			cls: 'codem-chat-tab' + (tab === this.activeTab ? ' is-active' : '') + (tab.pinned ? ' is-pinned' : ''),
+			});
 			const dot = b.createSpan({ cls: 'codem-chat-light' });
-			dot.addClass('is-' + tab.light);
-			b.createSpan({ text: String(i + 1) });
-			b.setAttribute('aria-label', `会话 ${i + 1}`);
-			b.onclick = () => this.switchTab(tab);
-			if (this.tabs.length > 1) {
-				const x = b.createSpan({ cls: 'codem-chat-tab-close', text: '×' });
-				x.onclick = (e) => {
-					e.stopPropagation();
-					this.removeTab(tab);
-				};
-			}
-		});
+				dot.addClass('is-' + tab.light);
+				// 标题：用户重命名 > 会话 AI 标题 > 序号
+					const label = tab.label ?? this.plugin.settings.sessionTitles[tab.sessionId ?? '']?.slice(0, 8) ?? String(i + 1);
+					b.createSpan({ cls: 'codem-chat-tab-label', text: label });
+				// 消息计数徽章
+			if (tab.turnCount > 0) {
+		b.createSpan({ cls: 'codem-chat-tab-count', text: `·${tab.turnCount}` });
+	}
+	  b.setAttribute('aria-label', `会话 ${i + 1}${tab.pinned ? '（已固定）' : ''}`);
+	  b.onclick = () => this.switchTab(tab);
+	  // 双击重命名（叶部式）
+	  b.addEventListener('dblclick', () => {
+	   b.empty();
+	   const input = b.createEl('input', { cls: 'codem-chat-tab-rename-input', type: 'text' });
+	   input.value = tab.label ?? '';
+	   input.placeholder = `会话 ${i + 1}`;
+	   input.focus();
+	   input.select();
+	   const commit = (): void => {
+	    tab.label = input.value.trim() || null;
+	    this.renderTabs();
+	   };
+	   input.addEventListener('blur', commit);
+	   input.addEventListener('keydown', (ev) => {
+	    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+	    if (ev.key === 'Escape') { ev.preventDefault(); this.renderTabs(); }
+	   });
+	  });
+	  // Pin 星标（叶部式）
+	  const pin = b.createSpan({ cls: 'codem-chat-tab-pin', text: tab.pinned ? '★' : '☆' });
+	  pin.onclick = (e) => {
+	   e.stopPropagation();
+	   tab.pinned = !tab.pinned;
+	   this.renderTabs();
+	  };
+	  if (this.tabs.length > 1) {
+	   const x = b.createSpan({ cls: 'codem-chat-tab-close', text: '×' });
+	   x.onclick = (e) => {
+	    e.stopPropagation();
+	    this.removeTab(tab);
+	   };
+	  }
+	 });
 	}
 
 	private switchTab(tab: ChatTab): void {
@@ -1101,6 +1148,19 @@ export class CodeMChatView extends ItemView {
 			this.infoTitleEl.setText(title);
 			this.infoTitleEl.toggleClass('is-empty', !title);
 		}
+		this.updateCtxMeter();
+	}
+
+	/** v0.7.0（叶部式）：ctx-meter 用量更新——按当前 tab 会话总字符量估算 token 占比 */
+	private updateCtxMeter(): void {
+		if (!this.ctxMeterEl) return;
+		const total = this.plugin.settings.contextWindowTokens || 200000;
+		// 粗估：中文字符≈1 token，英文≈0.25 token；用 mdBuffer 长度×0.7 作近似
+		const used = Math.round(this.activeTab.mdBuffer.length * 0.7);
+		const pct = Math.min(100, Math.round((used / total) * 100));
+		this.ctxMeterEl.setText(pct > 0 ? `${pct}%` : '');
+		// >80% 警示色
+		this.ctxMeterEl.toggleClass('is-warn', pct >= 80);
 	}
 
 	private async ensureClient(): Promise<AcpClient> {
@@ -1890,7 +1950,7 @@ export class CodeMChatView extends ItemView {
 			this.tabs.find((t) => t.busy && t.current) ??
 			this.activeTab;
 		const st = tab.current;
-		const toolCall = params.toolCall as { toolCallId?: string; title?: string } | undefined;
+		const toolCall = params.toolCall as { toolCallId?: string; title?: string; rawInput?: unknown } | undefined;
 		const toolName = toolCall?.title ?? '工具';
 		const label = toolName + '请求权限';
 		const options = (params.options as Array<{ optionId: string; name: string; kind?: string }>) ?? [];
@@ -1937,6 +1997,16 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 
+		// 命令前缀白名单（v0.7.0 叶部式）：命中前缀的命令自动放行
+		if (allowOnce) {
+			const cmd = this.extractPermPath(toolCall);
+			if (cmd && this.isPrefixAllowed(cmd)) {
+				respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
+				this.noteAutoApprove(st, tab, toolName, '前缀白名单');
+				return;
+			}
+		}
+
 		// 权限模式三档（v0.5.0）：🤖YOLO 全自动；✨智能 只读白名单自动；🔒手动 全部逐条确认
 		if (allowOnce && this.permMode === 'yolo') {
 			respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
@@ -1954,7 +2024,17 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 		const bar = createEl('div', { cls: 'codem-chat-perm' });
-		bar.createSpan({ text: `🔒 ${toolName}` });
+		// v0.7.0（叶部式）：风险分级 + 路径显示
+		const head = bar.createDiv({ cls: 'codem-chat-perm-head' });
+		head.createSpan({ text: `🔒 ${toolName}` });
+		// 风险分级：按工具名/类型判定（叶部 isVaultEditRequest 同理）
+		const risk = this.assessPermRisk(toolName, toolCall);
+		head.createSpan({ cls: `codem-chat-perm-risk is-${risk}` }).setText(
+			risk === 'high' ? '高危' : risk === 'medium' ? '可写' : '只读'
+		);
+		// 路径显示：从 rawInput 提取文件路径或命令
+		const permPath = this.extractPermPath(toolCall);
+		if (permPath) bar.createDiv({ cls: 'codem-chat-perm-path' }).setText(`📁 ${permPath}`);
 		// 登记为未决请求：按钮应答/看门狗超时/轮末回收统一走 settle/expire，防双重应答
 		const pr: PermRequest = {
 			bar,
@@ -1991,6 +2071,18 @@ export class CodeMChatView extends ItemView {
 				this.settlePermRequest(st, pr, { outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
 			};
 		}
+		// v0.7.0（叶部式）：命令前缀授权记忆——「始终允许「前缀」」按钮，同前缀命令后续自动放行
+		const cmdPrefix = this.extractCmdPrefix(toolCall);
+		if (allowAlways && cmdPrefix) {
+			const memBtn = bar.createEl('button', { text: `✓ 始终允许「${cmdPrefix}」`, cls: 'codem-chat-perm-mem' });
+			memBtn.onclick = async () => {
+				if (!this.plugin.settings.allowedCommandPrefixes.includes(cmdPrefix)) {
+					this.plugin.settings.allowedCommandPrefixes.push(cmdPrefix);
+					await this.plugin.saveSettings();
+				}
+				this.settlePermRequest(st, pr, { outcome: { outcome: 'selected', optionId: allowAlways.optionId } });
+			};
+		}
 		// 审批看门狗：5 分钟无人响应自动拒绝并留痕——审批条不再永久挂死一轮（用户不在电脑前时服务端会一直等）
 		st.permRequests.push(pr);
 		pr.timer = window.setTimeout(
@@ -2007,6 +2099,44 @@ export class CodeMChatView extends ItemView {
 			new Notice(`🔒 会话 ${this.tabs.indexOf(tab) + 1} 请求权限确认，请切换到该窗口`);
 		}
 		this.scrollBottom(tab.scrollEl);
+	}
+
+	/** v0.7.0（叶部式）：风险分级——bash/shell=high，edit/write/patch=medium，其余=low */
+	private assessPermRisk(toolName: string, toolCall?: { rawInput?: unknown }): 'high' | 'medium' | 'low' {
+		const t = toolName.toLowerCase();
+		if (/(bash|shell|cmd|exec|delete|remove|run_command|process)/i.test(t)) return 'high';
+		if (/(edit|write|patch|multi_edit|create|move|copy)/i.test(t)) return 'medium';
+		return 'low';
+	}
+
+	/** v0.7.0（叶部式）：从 rawInput 提取路径（filePath/command/target），供审批条显示 */
+	private extractPermPath(toolCall?: { rawInput?: unknown }): string {
+		if (!toolCall?.rawInput || typeof toolCall.rawInput !== 'object') return '';
+		const raw = toolCall.rawInput as Record<string, unknown>;
+		return (
+			(typeof raw.filePath === 'string' && raw.filePath) ||
+			(typeof raw.command === 'string' && raw.command.split(' ').slice(0, 3).join(' ')) ||
+			(typeof raw.target === 'string' && raw.target) ||
+			''
+		);
+	}
+
+	/** v0.7.0（叶部式）：从 rawInput 提取命令前两词作「命令前缀」（如 npm install） */
+	private extractCmdPrefix(toolCall?: { rawInput?: unknown }): string {
+		if (!toolCall?.rawInput || typeof toolCall.rawInput !== 'object') return '';
+		const raw = toolCall.rawInput as Record<string, unknown>;
+		if (typeof raw.command !== 'string' || !raw.command) return '';
+		const words = raw.command.trim().split(/\s+/);
+		return words.slice(0, Math.min(2, words.length)).join(' ');
+	}
+
+	/** v0.7.0（叶部式）：检查命令是否命中已记住的前缀白名单 */
+	private isPrefixAllowed(cmd: string): boolean {
+		const prefixes = this.plugin.settings.allowedCommandPrefixes ?? [];
+		return prefixes.some((p) => {
+			const t = p.trim();
+			return t && (cmd === t || cmd.startsWith(t + ' '));
+		});
 	}
 
 	/** 防僵尸复活辅助：已点击的按钮从 pendingPerms 摘除 + 打 dataset 标记 */

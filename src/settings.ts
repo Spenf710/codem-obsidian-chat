@@ -26,6 +26,10 @@ export interface CodeMSettings {
 	readonlyAutoApprove: boolean;
 	/** AI 生成的会话标题（sessionId → 标题），优先于历史列表里的首问显示 */
 	sessionTitles: Record<string, string>;
+	/** 上下文窗口 token 数（用于 ctx-meter 用量估算） */
+	contextWindowTokens: number;
+	/** 已记住的命令前缀白名单（如 "npm install"），同前缀命令自动放行 */
+	allowedCommandPrefixes: string[];
 }
 
 export const DEFAULT_SETTINGS: CodeMSettings = {
@@ -36,6 +40,8 @@ export const DEFAULT_SETTINGS: CodeMSettings = {
 	maxWindows: 3,
 	readonlyAutoApprove: true,
 	sessionTitles: {},
+	contextWindowTokens: 200000,
+	allowedCommandPrefixes: [],
 };
 
 export class CodeMSettingTab extends PluginSettingTab {
@@ -128,6 +134,39 @@ export class CodeMSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 			);
+
+		new Setting(containerEl)
+			.setName('上下文窗口 token 数')
+			.setDesc('用于底部用量环（ctx-meter）的百分比估算，不影响实际行为')
+			.addText((text) =>
+				text
+					.setPlaceholder('200000')
+					.setValue(String(this.plugin.settings.contextWindowTokens))
+					.onChange(async (v) => {
+						this.plugin.settings.contextWindowTokens = Number(v) || 200000;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// 已记住的命令前缀（叶部式：设置页逐条移除）
+		const prefixes = this.plugin.settings.allowedCommandPrefixes ?? [];
+		if (prefixes.length > 0) {
+			const prefSection = containerEl.createEl('details');
+			prefSection.createEl('summary', { text: `已记住的命令前缀（${prefixes.length} 条）` });
+			const prefList = prefSection.createDiv({ cls: 'codem-chat-allowed-list' });
+			for (const p of prefixes) {
+				const row = prefList.createDiv({ cls: 'codem-chat-allowed-row' });
+				row.createSpan({ text: p });
+				const rm = row.createEl('button', { text: '✕' });
+				rm.onclick = async () => {
+					const idx = this.plugin.settings.allowedCommandPrefixes.indexOf(p);
+					if (idx >= 0) this.plugin.settings.allowedCommandPrefixes.splice(idx, 1);
+					await this.plugin.saveSettings();
+					prefSection.remove();
+					this.display();
+				};
+			}
+		}
 	}
 
 	/** 环境自检并刷新「CodeM 环境」区块（重建该行按钮） */

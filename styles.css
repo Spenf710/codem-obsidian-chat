@@ -321,17 +321,29 @@ body.theme-light .codem-chat-root {
 	white-space: nowrap;
 }
 
+/* v0.7.0 P0-1（叶部 v1.21.0 同款）：圆角重绘修复——鼠标移入 textarea 时左上角圆弧消失的根因是
+   Chromium 局部重绘不覆盖重叠圆角；修法：外框 border 透明只占位，边框交给 ::after 伪元素画（absolute 层压得住重绘） */
 .codem-chat-inputwrap {
 	position: relative;
 	margin: 0 12px 12px;
-	border: 1px solid var(--background-modifier-border);
+	border: 1px solid transparent;
 	border-radius: 10px;
 	background: var(--background-primary);
 	display: flex;
 	flex-direction: column;
 }
 
-.codem-chat-inputwrap:focus-within {
+.codem-chat-inputwrap::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: inherit;
+	pointer-events: none;
+	transition: border-color 120ms ease;
+}
+
+.codem-chat-inputwrap:focus-within::after {
 	border-color: var(--interactive-accent);
 }
 
@@ -1365,4 +1377,136 @@ button.codem-chat-stop.codem-chat-chip:disabled {
 }
 .codem-chat-input::-webkit-resizer {
 	background: transparent;
+}
+
+/* —— v0.7.0 P0 CSS（叶部式增强）：ctx-meter / 审批风险分级 / Tab Pin 重命名计数 / 前缀授权 —— */
+
+/* ctx-meter 上下文用量文本（叶部式：底部 chip 行尾部，>80% 变警示色） */
+.codem-chat-ctx-text {
+	flex: 0 0 auto;
+	font-size: 10px;
+	color: var(--text-faint);
+	min-width: 30px;
+	text-align: end;
+	white-space: nowrap;
+	user-select: none;
+}
+.codem-chat-ctx-text.is-warn {
+	color: var(--text-error);
+	font-weight: 500;
+}
+
+/* 审批条风险分级徽章（叶部式三档） */
+.codem-chat-perm-risk {
+	flex-shrink: 0;
+	font-size: 10px;
+	padding: 0 5px;
+	border-radius: 4px;
+	user-select: none;
+	white-space: nowrap;
+}
+.codem-chat-perm-risk.is-high {
+	color: var(--text-error);
+	background: rgba(var(--color-red-rgb), 0.12);
+}
+.codem-chat-perm-risk.is-medium {
+	color: var(--text-warning, #e67e22);
+	background: rgba(230, 126, 34, 0.12);
+}
+.codem-chat-perm-risk.is-low {
+	color: var(--text-success);
+	background: rgba(var(--color-green-rgb), 0.12);
+}
+
+/* 审批条头行（工具名 + 风险徽章同行） */
+.codem-chat-perm-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+/* 审批条路径显示 */
+.codem-chat-perm-path {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
+	padding: 1px 0;
+}
+
+/* 「始终允许「前缀」」按钮 */
+button.codem-chat-perm-mem {
+	color: var(--text-success);
+	border-color: rgba(var(--color-green-rgb), 0.4);
+}
+
+/* Tab Pin 星标 */
+.codem-chat-tab-pin {
+	font-size: 11px;
+	line-height: 1;
+	opacity: 0.6;
+	padding: 0 1px;
+}
+.codem-chat-tab-pin:hover {
+	opacity: 1;
+}
+
+/* Tab 标签文字（用户重命名 / AI 标题 / 序号） */
+.codem-chat-tab-label {
+	max-width: 60px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Tab 消息计数徽章 */
+.codem-chat-tab-count {
+	font-size: 9px;
+	color: var(--text-faint);
+	opacity: 0.8;
+}
+
+/* Tab 重命名输入框 */
+input.codem-chat-tab-rename-input {
+	width: 60px;
+	font-size: var(--font-ui-smaller);
+	padding: 0 2px;
+	border: 1px solid var(--interactive-accent);
+	border-radius: 3px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	outline: none;
+}
+
+/* Tab Pin 状态边框 */
+.codem-chat-tab.is-pinned {
+	border-color: var(--interactive-accent);
+}
+
+/* 设置页：已记住的命令前缀列表 */
+.codem-chat-allowed-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 6px 0;
+}
+.codem-chat-allowed-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	font-size: var(--font-ui-smaller);
+	padding: 2px 8px;
+	border-radius: 4px;
+	background: var(--background-secondary);
+}
+.codem-chat-allowed-row button {
+	padding: 0 4px;
+	cursor: pointer;
+	border: none;
+	background: none;
+	color: var(--text-error);
 }
