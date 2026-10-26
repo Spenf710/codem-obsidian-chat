@@ -1,4 +1,4 @@
-import { ItemView, Notice, WorkspaceLeaf, setIcon, TFile, TFolder } from 'obsidian';
+import { ItemView, Menu, Notice, WorkspaceLeaf, setIcon, TFile, TFolder } from 'obsidian';
 import * as fs from 'fs';
 import * as path from 'path';
 import type CodeMChatPlugin from './main';
@@ -198,6 +198,16 @@ export class CodeMChatView extends ItemView {
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
+	/** 模型参数（v0.5.1 UI 对标叶版）：CLI 进程启动参数，变更后重启 ACP 进程生效（探针实测 --intelligence/--reasoning-effort/--plan 均可用） */
+	private modelOpts: { intelligence: string; reasoning: string; plan: boolean } = {
+		intelligence: '', // 空 = 跟随配置（不传参）
+		reasoning: '',
+		plan: false,
+	};
+	/** 底部会话短码显示（叶版式：✳ CodeM · 376d7c7d） */
+	private sidEl: HTMLElement | null = null;
+	/** 参数重启中标志：抑制 onClose 的"服务已断开"误报 */
+	private restarting = false;
 
 	// 多会话 tab（视图内并行，参考 Claudian 数字 tab）
 	private tabs: ChatTab[] = [];
@@ -368,11 +378,41 @@ export class CodeMChatView extends ItemView {
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
 		this.lightEl = bottomRow.createSpan({ cls: 'codem-chat-light is-idle' });
 		bottomRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
-		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
-		this.permBtn = actions.createEl('button', { text: '✨ 智能审批', cls: 'codem-chat-yolo' });
-		this.permBtn.setAttribute('aria-label', '权限模式：手动 / 智能 / YOLO，点击切换');
-		this.permBtn.onclick = () => this.cyclePermMode();
+		this.sidEl = bottomRow.createSpan({ cls: 'codem-chat-sid' });
+		// chip 行（v0.5.1 UI 对标叶版）：权限 / 智能 / 推理 / Plan，一行小胶囊控件
+		const chips = bottomRow.createDiv({ cls: 'codem-chat-chips' });
+		// 权限模式 chip：下拉菜单三选一（替代 v0.5.0 的循环点击）
+		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip' });
+		this.permBtn.setAttribute('aria-label', '权限模式：手动 / 智能 / YOLO，点击选择');
+		this.permBtn.onclick = (e) => {
+			const menu = new Menu();
+			const modes: Array<{ mode: 'manual' | 'smart' | 'yolo'; title: string }> = [
+				{ mode: 'manual', title: '🔒 手动：逐次确认' },
+				{ mode: 'smart', title: '✨ 智能：只读工具自动批准' },
+				{ mode: 'yolo', title: '🤖 YOLO：全部自动批准' },
+			];
+			for (const it of modes) {
+				menu.addItem((mi) =>
+					mi.setTitle(it.title).setChecked(this.permMode === it.mode).onClick(() => this.setPermMode(it.mode))
+				);
+			}
+			menu.showAtMouseEvent(e);
+		};
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
+		// 智能 chip：Intelligence 下拉（CLI --intelligence，low/medium/high/xhigh；跟随配置=不传）
+		this.buildOptChip(chips, '智能', 'hl-blue', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
+		// 推理 chip：Reasoning 下拉（CLI --reasoning-effort，上游原生值域；跟随配置=不传）
+		this.buildOptChip(chips, '推理', 'hl-orange', ['minimal', 'low', 'medium', 'high', 'max'], () => this.modelOpts.reasoning, (v) => (this.modelOpts.reasoning = v));
+		// Plan chip：只读工作模式开关（CLI --plan，与权限模式正交）
+		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip', text: 'Plan' });
+		planBtn.setAttribute('aria-label', 'Plan 模式：只读不写（新进程生效）');
+		planBtn.onclick = () => {
+			this.modelOpts.plan = !this.modelOpts.plan;
+			planBtn.toggleClass('is-on', this.modelOpts.plan);
+			this.applyModelOpts();
+			new Notice(this.modelOpts.plan ? 'Plan 模式：只读不写，已按新参数重启 CodeM' : 'Plan 模式已关闭，已按新参数重启 CodeM', 3000);
+		};
+		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
 		// 停止按钮：仅执行中显示（同步见 setStatusLight → syncStopButton），与 ESC 等效
 		this.stopBtn = actions.createEl('button', { text: '⏹ 停止', cls: 'codem-chat-stop' });
 		this.stopBtn.setAttribute('aria-label', '停止当前任务（Esc）');
@@ -720,6 +760,7 @@ export class CodeMChatView extends ItemView {
 		this.inputEl.value = tab.draft;
 		this.renderTabs();
 		this.renderPreviews();
+		this.updateSidEl();
 		this.setStatusLight(tab.light);
 		this.inputEl.focus();
 	}
@@ -768,6 +809,7 @@ export class CodeMChatView extends ItemView {
 		this.renderPreviews();
 		this.msgContainer.empty();
 		this.renderEmpty();
+		this.updateSidEl();
 		this.setStatusLight('idle');
 	}
 
@@ -958,13 +1000,98 @@ export class CodeMChatView extends ItemView {
 
 	private pluginOpts(): AcpOptions {
 		const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
+		// 模型参数（v0.5.1）：进程启动参数，拼在用户额外参数之后；空值/关闭不传
+		const optArgs: string[] = [];
+		if (this.modelOpts.intelligence) optArgs.push(`--intelligence ${this.modelOpts.intelligence}`);
+		if (this.modelOpts.reasoning) optArgs.push(`--reasoning-effort ${this.modelOpts.reasoning}`);
+		if (this.modelOpts.plan) optArgs.push('--plan');
+		const extra = [this.plugin.settings.extraArgs?.trim(), ...optArgs].filter(Boolean).join(' ');
 		return {
 			cliPath: this.plugin.settings.codemCliPath,
 			cwd,
 			nodePath: this.plugin.settings.nodePath,
-			extraArgs: this.plugin.settings.extraArgs,
+			extraArgs: extra,
 			debugLogPath: undefined,
 		};
+	}
+
+	/** 构建「标签 值 ▾」chip：点击弹菜单选值（v0.5.1 UI 对标叶版；空串 = 跟随配置不传参） */
+	private buildOptChip(
+		host: HTMLElement,
+		label: string,
+		hlCls: string,
+		values: string[],
+		get: () => string,
+		set: (v: string) => void
+	): void {
+		const btn = host.createEl('button', { cls: 'codem-chat-chip' });
+		btn.createSpan({ cls: hlCls, text: label });
+		const valEl = btn.createSpan({ text: ' 跟随' });
+		btn.createSpan({ cls: 'caret', text: '▾' });
+		btn.onclick = (e) => {
+			const menu = new Menu();
+			menu.addItem((mi) =>
+				mi.setTitle('跟随配置').setChecked(get() === '').onClick(() => {
+					set('');
+					valEl.setText(' 跟随');
+					this.applyModelOpts();
+				})
+			);
+			for (const v of values) {
+				menu.addItem((mi) =>
+					mi.setTitle(v).setChecked(get() === v).onClick(() => {
+						set(v);
+						valEl.setText(' ' + v);
+						this.applyModelOpts();
+					})
+				);
+			}
+			menu.showAtMouseEvent(e);
+		};
+	}
+
+	/**
+	 * 模型参数变更（智能/推理/Plan）：参数是进程启动参数，需重启 ACP 进程生效；
+	 * 各 tab 已持有的会话重启后自动 load 恢复（重放通知因 tab.current 为空被忽略，不污染时间线）
+	 */
+	private applyModelOpts(): void {
+		const held = this.tabs
+			.map((t) => ({ t, sid: t.sessionId }))
+			.filter((x): x is { t: ChatTab; sid: string } => !!x.sid);
+		this.restarting = true; // 抑制 onClose 的"服务已断开"误报
+		this.client?.stop();
+		this.client = null;
+		for (const t of this.tabs) t.sessionId = null;
+		if (!held.length) {
+			// 还没有活会话：无需恢复，下次 ensureClient 时新参数自然生效
+			this.restarting = false;
+			return;
+		}
+		new Notice('已按新参数重启 CodeM 进程，正在恢复会话…', 3000);
+		void (async () => {
+			try {
+				const client = await this.ensureClient();
+				for (const { t, sid } of held) {
+					try {
+						await client.loadSession(sid);
+						t.sessionId = sid;
+					} catch {
+						// 恢复失败：该 tab 下次发送时自动新建会话
+					}
+				}
+			} catch {
+				// 重启失败：下次发送时自动重连
+			} finally {
+				this.restarting = false;
+			}
+		})();
+	}
+
+	/** 底部会话短码（叶版式 ✳ CodeM · 376d7c7d）：切 tab/新会话/载入历史时同步 */
+	private updateSidEl(): void {
+		if (!this.sidEl) return;
+		const sid = this.activeTab.sessionId;
+		this.sidEl.setText(sid ? '· ' + sid.slice(0, 8) : '');
 	}
 
 	private async ensureClient(): Promise<AcpClient> {
@@ -975,8 +1102,10 @@ export class CodeMChatView extends ItemView {
 				onUpdate: (sid, u) => this.handleUpdate(sid, u),
 				onPermissionRequest: (params, respond) => this.handlePermission(params, respond),
 				onClose: (code) => {
-					// 连接是全部 tab 共享的，断连复位所有 tab 的执行状态
-					this.client = null;
+				// 参数重启流程（applyModelOpts）自行接管复位，跳过误报
+				if (this.restarting) return;
+				// 连接是全部 tab 共享的，断连复位所有 tab 的执行状态
+				this.client = null;
 					for (const t of this.tabs) {
 						t.sessionId = null;
 						if (t.busy) {
@@ -1096,7 +1225,10 @@ export class CodeMChatView extends ItemView {
 
 		try {
 			const client = await this.ensureClient();
-			if (!tab.sessionId) tab.sessionId = await client.newSession();
+			if (!tab.sessionId) {
+				tab.sessionId = await client.newSession();
+				if (tab === this.activeTab) this.updateSidEl();
+			}
 			const injected = await this.resolveNoteContexts(rawPrompt);
 			// 软续接：历史快照作为背景随本轮 prompt 附带
 			const finalPrompt = tab.pendingContext
@@ -2223,6 +2355,7 @@ export class CodeMChatView extends ItemView {
 			if (loaded) {
 				this.sessionId = card.sessionId;
 				this.pendingContext = null;
+				this.updateSidEl();
 			} else {
 				// 软续接兜底：原生 load 失败（被占用/不可载入）时，把历史轮次做成快照，
 				// 随下一条用户消息注入新会话，保证任何会话都能接着聊

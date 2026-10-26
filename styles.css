@@ -1181,3 +1181,61 @@ button.codem-chat-code-copy:hover { color: var(--text-normal); }
 	color: var(--text-error);
 	padding: 2px 0;
 }
+
+/* —— v0.5.1 输入框形态对标叶版：chip 行 + 会话短码 + 输入区可拖高 —— */
+
+.codem-chat-chips {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	flex: 1;
+	min-width: 0;
+}
+.codem-chat-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	padding: 1px 8px;
+	border-radius: 10px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	cursor: pointer;
+	line-height: 1.6;
+	white-space: nowrap;
+}
+.codem-chat-chip:hover {
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
+}
+.codem-chat-chip.is-on {
+	color: var(--text-accent);
+	border-color: var(--interactive-accent);
+	background: rgba(var(--interactive-accent-rgb, 0, 102, 204), 0.1);
+}
+.codem-chat-chip .caret {
+	font-size: 9px;
+	opacity: 0.7;
+}
+.codem-chat-chip .hl-blue {
+	color: var(--text-accent);
+}
+.codem-chat-chip .hl-orange {
+	color: var(--text-warning, #e67e22);
+}
+/* 会话短码（✳ CodeM · 376d7c7d） */
+.codem-chat-sid {
+	font-size: 10px;
+	color: var(--text-faint);
+	margin-left: 2px;
+	user-select: none;
+	white-space: nowrap;
+}
+/* 输入区高度可拖拽调节（叶版式 resize 手柄） */
+.codem-chat-input {
+	resize: vertical;
+	min-height: 3em;
+	max-height: 40vh;
+}
