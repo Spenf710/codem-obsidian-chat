@@ -390,10 +390,11 @@ export class CodeMChatView extends ItemView {
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
 		const chips = bottomRow.createDiv({ cls: 'codem-chat-chips' });
 		// 权限模式 chip（v0.6.0 三段式：档位名 value + chevron，对齐叶部 chip 结构）
-		// v0.6.4：照抄叶部实现——chip 内纯 emoji+文字（无 SVG 图标，字体渲染基线天然对齐）；type=button 同步对齐
+		// v0.6.5：方案 F（对照实验唯一零错位）——全部内容包进内层 flex span，基线由 flex 强制，免疫 emoji 大行盒
 		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-perm', attr: { type: 'button' } });
-		this.permLabelEl = this.permBtn.createSpan({ cls: 'codem-chat-chip-value' });
-		this.permBtn.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
+		const permInner = this.permBtn.createSpan({ cls: 'codem-chat-chip-inner' });
+		this.permLabelEl = permInner.createSpan({ cls: 'codem-chat-chip-value' });
+		permInner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		this.permBtn.setAttribute('aria-label', '权限模式：手动 / 智能 / YOLO，点击选择');
 		this.permBtn.onclick = (e) => {
 			const menu = new Menu();
@@ -415,7 +416,8 @@ export class CodeMChatView extends ItemView {
 		// 推理 chip：label 语义橙（叶部 --codem-tool-bash）；CLI --reasoning-effort，跟随配置=不传
 		this.buildOptChip(chips, '推理', 'codem-chat-reasoning', ['minimal', 'low', 'medium', 'high', 'max'], () => this.modelOpts.reasoning, (v) => (this.modelOpts.reasoning = v));
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
-		const planBtn = chips.createEl('button', { text: '📋 Plan', cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
+		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
+		planBtn.createSpan({ cls: 'codem-chat-chip-inner', text: '📋 Plan' });
 		planBtn.setAttribute('aria-label', 'Plan 模式：只读不写（新进程生效）');
 		planBtn.onclick = () => {
 			this.modelOpts.plan = !this.modelOpts.plan;
@@ -424,8 +426,9 @@ export class CodeMChatView extends ItemView {
 			new Notice(this.modelOpts.plan ? 'Plan 模式：只读不写，已按新参数重启 CodeM' : 'Plan 模式已关闭，已按新参数重启 CodeM', 3000);
 		};
 		const actions = bottomRow.createDiv({ cls: 'codem-chat-actions' });
-		// 停止按钮：常驻图标 chip，空闲禁用（叶部式，不再显示/隐藏）
-		this.stopBtn = actions.createEl('button', { text: '⏹', cls: 'codem-chat-stop codem-chat-chip' });
+		// 停止按钮：常驻图标 chip，空闲禁用（叶部式，不再显示/隐藏）；内容包 inner（v0.6.5 方案 F）
+		this.stopBtn = actions.createEl('button', { cls: 'codem-chat-stop codem-chat-chip', attr: { type: 'button' } });
+		this.stopBtn.createSpan({ cls: 'codem-chat-chip-inner', text: '⏹' });
 		this.stopBtn.setAttribute('aria-label', '停止当前任务（Esc）');
 		this.stopBtn.disabled = true;
 		this.stopBtn.onclick = () => this.stopActiveTurn();
@@ -1025,9 +1028,10 @@ export class CodeMChatView extends ItemView {
 		set: (v: string) => void
 	): void {
 		const btn = host.createEl('button', { cls: 'codem-chat-chip ' + kindCls, attr: { type: 'button' } });
-		btn.createSpan({ cls: 'codem-chat-chip-label', text: label });
-		const valEl = btn.createSpan({ cls: 'codem-chat-chip-value', text: '跟随' });
-		btn.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
+		const inner = btn.createSpan({ cls: 'codem-chat-chip-inner' });
+		inner.createSpan({ cls: 'codem-chat-chip-label', text: label });
+		const valEl = inner.createSpan({ cls: 'codem-chat-chip-value', text: '跟随' });
+		inner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		btn.onclick = (e) => {
 			const menu = new Menu();
 			menu.addItem((mi) =>

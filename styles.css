@@ -1338,6 +1338,14 @@ button.codem-chat-stop.codem-chat-chip:disabled {
 	}
 }
 /* v0.6.4：chip 图标 CSS 全部移除——照抄叶部实现（emoji 与文字同为字体渲染，基线天然对齐，SVG 与文字混排才是错位根源） */
+/* v0.6.5 方案 F（Edge headless 对照实验唯一零错位解）：chip 全内容包进内层 flex span，
+   文字/emoji/chevron 基线由 flex 强制居中，免疫 Windows Segoe UI Emoji ≈1.34em 大行盒导致的基线漂移 */
+.codem-chat-chip-inner {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
 /* 信息行会话标题（叶部 info-title） */
 .codem-chat-info-title {
 	min-width: 0;
