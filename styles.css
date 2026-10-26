@@ -1044,3 +1044,38 @@ body.theme-light .codem-chat-root {
 	outline-offset: 1px;
 	border-radius: var(--codem-radius-s);
 }
+
+/* —— v0.3.1 性能优化：大段流式降级纯文本 / 超长段折叠 / diff 截断 / 权限一键全自动 —— */
+
+/* 大段流式降级：纯文本模式（段收束后恢复完整 markdown 渲染），保留换行 */
+.codem-chat-text.is-plain {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+/* 超长段折叠容器 */
+.codem-chat-seg-fold {
+	margin: 6px 0;
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: var(--codem-radius-s);
+	padding: 4px 10px;
+}
+.codem-chat-seg-fold > summary {
+	cursor: pointer;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	user-select: none;
+}
+.codem-chat-seg-fold > summary:hover {
+	color: var(--text-normal);
+}
+/* write_file 大 diff 截断提示 */
+.codem-chat-diff-trunc {
+	font-size: 11px;
+	color: var(--text-faint);
+	padding: 2px 6px;
+}
+/* 权限条"后续全自动"按钮：绿色强调，区别于普通三档 */
+.codem-chat-perm .codem-chat-perm-yolo {
+	color: var(--text-success);
+	border-color: rgba(var(--color-green-rgb), 0.4);
+}

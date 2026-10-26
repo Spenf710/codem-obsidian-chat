@@ -22,6 +22,8 @@ export interface CodeMSettings {
 	extraArgs: string;
 	/** 多窗口模式：同时打开的聊天窗口上限 */
 	maxWindows: number;
+	/** 只读工具白名单自动批准（read_files/grep/glob/skill 等免逐条弹窗） */
+	readonlyAutoApprove: boolean;
 	/** AI 生成的会话标题（sessionId → 标题），优先于历史列表里的首问显示 */
 	sessionTitles: Record<string, string>;
 }
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: CodeMSettings = {
 	timeoutMs: 300000,
 	extraArgs: '',
 	maxWindows: 3,
+	readonlyAutoApprove: true,
 	sessionTitles: {},
 };
 
@@ -114,6 +117,16 @@ export class CodeMSettingTab extends PluginSettingTab {
 						this.plugin.settings.maxWindows = Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_SETTINGS.maxWindows;
 						await this.plugin.saveSettings();
 					})
+			);
+
+		new Setting(containerEl)
+			.setName('只读工具自动批准')
+			.setDesc('白名单工具（read_files / grep / glob / list_dir / skill / web_search / web_fetch / tool_search）的权限请求自动批准并聚合显示，不再逐条弹窗')
+			.addToggle((tg) =>
+				tg.setValue(this.plugin.settings.readonlyAutoApprove).onChange(async (v) => {
+					this.plugin.settings.readonlyAutoApprove = v;
+					await this.plugin.saveSettings();
+				})
 			);
 	}
 

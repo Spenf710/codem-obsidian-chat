@@ -28,6 +28,15 @@ const TYPE_INTERVAL = 30;
 const TOOL_RESULT_MAX_LEN = 2000;
 const FOLDER_INJECT_MAX = 12000;
 const SUGGEST_MAX = 50;
+/** 流式段长度阈值：超过后打字机降级为纯文本增量追加，段收束时再完整渲染 markdown。
+ *  防的是每 tick 全量 parse+净化+重建 DOM 的 O(n²) 渲染——35KB 单条消息流式时主线程被吃满，整个 Obsidian 一起冻结 */
+const STREAM_MD_LIMIT = 4000;
+/** 收束后超长正文段阈值：折叠为 details，避免超大渲染 DOM 常驻拖慢整页布局与滚动 */
+const SEG_COLLAPSE_LIMIT = 20000;
+/** write_file 客户端自构造 diff 最多渲染行数（超出截断提示） */
+const DIFF_MAX_LINES = 200;
+/** 只读工具白名单：权限请求命中即自动批准（settings.readonlyAutoApprove 可关）；按工具名小写包含匹配 */
+const READONLY_TOOLS = ['read_files', 'grep', 'glob', 'list_dir', 'skill', 'web_search', 'web_fetch', 'tool_search'];
 
 interface ToolCard {
 	detailsEl: HTMLDetailsElement;
@@ -50,6 +59,8 @@ interface TextSeg {
 	buf: string;
 	shown: number;
 	done: boolean;
+	/** 大段降级模式的 textNode：流式期间只 appendData 增量追加，段收束时 flushSeg 再完整渲染 */
+	plainNode: Text | null;
 }
 
 /** 一轮对话的渲染句柄（onUpdate 回调据此路由到当前消息块） */
@@ -65,8 +76,10 @@ interface RenderState {
 	cards: Map<string, ToolCard>;
 	/** 早于 tool_call 通知到达的权限条暂存（toolCallId → 条目），卡片创建时回挂 */
 	pendingPerms: Map<string, HTMLElement[]>;
-	/** yolo 批准轮内聚合条（唯一，逐次更新计数，沉底不刷屏） */
-	yoloNote?: { el: HTMLElement; counts: Map<string, number>; total: number };
+	/** 自动批准（yolo/只读白名单/记住授权）轮内聚合条（唯一，逐次更新计数，沉底不刷屏） */
+	yoloNote?: { el: HTMLElement; counts: Map<string, number>; total: number; labels: Set<string> };
+	/** 思考区增量 textNode：流式 thought chunk 只 appendData，避免 textContent += 每 chunk 全量重赋 */
+	thinkNode: Text | null;
 	/** 轮次统计：起始时间戳与工具调用次数，轮末渲染耗时条 */
 	turnStart: number;
 	toolCount: number;
@@ -929,6 +942,7 @@ export class CodeMChatView extends ItemView {
 		tab.images = [];
 		this.renderPreviews();
 		const userBlock = this.renderUserMessage(rawPrompt, images);
+		this.forceScrollBottom();
 		this.addTurnAnchor(userBlock);
 		const st = this.renderAssistantSkeleton();
 		tab.current = st;
@@ -1211,7 +1225,7 @@ export class CodeMChatView extends ItemView {
 		const thinkingSummary = thinking.createEl('summary', { text: '思考中…' });
 		const thinkingBody = thinking.createDiv({ cls: 'codem-chat-thinking-body' });
 		this.scrollBottom();
-		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map(), turnStart: Date.now(), toolCount: 0 };
+		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map(), thinkNode: null, turnStart: Date.now(), toolCount: 0 };
 	}
 
 	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
@@ -1267,8 +1281,21 @@ export class CodeMChatView extends ItemView {
 			if (!seg || seg.shown >= seg.buf.length) return;
 			const step = Math.max(1, Math.ceil((seg.buf.length - seg.shown) / 15));
 			seg.shown = Math.min(seg.buf.length, seg.shown + step);
-			seg.el.empty();
-			seg.el.appendChild(renderMarkdown(seg.buf.slice(0, seg.shown)));
+			// 大段降级：超过阈值不再每 tick 全量 parse+净化+重建 DOM（长消息冻结主因），
+			// 切换为单 textNode 增量追加；段收束（flushSeg）时一次性完整渲染定格
+			if (seg.buf.length > STREAM_MD_LIMIT) {
+				if (!seg.plainNode) {
+					seg.el.empty();
+					seg.el.addClass('is-plain');
+					seg.plainNode = document.createTextNode(seg.buf.slice(0, seg.shown));
+					seg.el.appendChild(seg.plainNode);
+				} else if (seg.shown > seg.plainNode.length) {
+					seg.plainNode.appendData(seg.buf.slice(seg.plainNode.length, seg.shown));
+				}
+			} else {
+					seg.el.empty();
+					seg.el.appendChild(renderMarkdown(seg.buf.slice(0, seg.shown)));
+			}
 			this.scrollBottom(tab.scrollEl);
 		}, TYPE_INTERVAL);
 	}
@@ -1303,19 +1330,27 @@ export class CodeMChatView extends ItemView {
 				const el = createEl('div', { cls: 'codem-chat-text markdown-rendered' });
 				st.anchor.after(el);
 				st.anchor = el;
-				st.curSeg = { el, buf: '', shown: 0, done: false };
+				st.curSeg = { el, buf: '', shown: 0, done: false, plainNode: null };
 				st.textSegs.push(st.curSeg);
 			}
 			st.curSeg.buf += text;
 		} else if (kind === 'agent_thought_chunk') {
-			st.thinkingBody.textContent += content?.text ?? '';
-			st.thinkingBody.scrollTop = st.thinkingBody.scrollHeight;
+			// 增量追加：textNode.appendData 替代 textContent +=（后者每 chunk 全量重赋+强制布局）；
+			// 思考区自身不再逐 chunk 滚动，外层滚底已由 rAF 节流统一处理
+			if (!st.thinkNode) {
+				st.thinkNode = document.createTextNode('');
+				st.thinkingBody.appendChild(st.thinkNode);
+			}
+			st.thinkNode.appendData(content?.text ?? '');
 			this.scrollBottom(tab.scrollEl);
 		} else if (kind === 'tool_call' || kind === 'tool_call_update') {
 			// ask_user 在当前 CodeM 版本（0.1.229/agent 0.8.59+）不支持插件侧 RPC 交互：
 			// 探针实测 agent 不发送任何 agent→client 请求，tool_call 秒完成并返回
 			// {"status":"cancelled"}。用户无法进行任何选择，故在工具卡上方给明确提示。
-			const isAskUserCancel = (update.title === 'ask_user' || update.kind === 'other') && status === 'completed';
+			// 修 bug：原代码误用未声明的 status（静默命中 window.status 恒为空串，提示永不触发）
+			const isAskUserCancel =
+				(update.title === 'ask_user' || update.kind === 'other') &&
+				(update.status as string) === 'completed';
 			if (isAskUserCancel) {
 				st.aiBlock.createDiv({ cls: 'codem-chat-askuser-hint' }).setText('ℹ️ ask_user 选项交互当前版本暂不支持，CodeM 侧已自动取消本次选择。');
 			}
@@ -1404,8 +1439,18 @@ export class CodeMChatView extends ItemView {
 		if (!seg) return;
 		st.curSeg = null;
 		seg.done = true;
+		seg.el.removeClass('is-plain');
 		seg.el.empty();
-		seg.el.appendChild(renderMarkdown(seg.buf));
+		const frag = renderMarkdown(seg.buf);
+		// 超长段折叠：单次渲染几十 KB markdown 也会产生大 DOM 常驻，折叠避免拖慢整页布局与滚动
+		if (seg.buf.length > SEG_COLLAPSE_LIMIT) {
+			const det = createEl('details', { cls: 'codem-chat-seg-fold' });
+			det.createEl('summary', { text: `📄 长内容（约 ${seg.buf.length} 字）已折叠，点击展开` });
+			det.appendChild(frag);
+			seg.el.appendChild(det);
+		} else {
+			seg.el.appendChild(frag);
+		}
 		// hover 复制按钮（Claudian 式：浮在文本段右下角，hover 才出现）
 		const copyBtn = seg.el.createEl('button', { cls: 'codem-chat-copy-btn' });
 		copyBtn.setAttribute('aria-label', '复制此段');
@@ -1441,11 +1486,18 @@ export class CodeMChatView extends ItemView {
 			const oldStr = typeof raw.old_string === 'string' ? raw.old_string : '';
 			const newStr = typeof raw.new_string === 'string' ? raw.new_string : '';
 			if (!oldStr) {
-				// 全量写入（write_file）：所有行按新增展示，行号即内容行序
+				// 全量写入（write_file）：所有行按新增展示，行号即内容行序；大文件截断防几千行 DOM
 				const content = typeof raw.content === 'string' ? raw.content : '';
 				if (!content) return;
-				this.renderDiff(card.contentEl, content.split('\n').map((text, i) => ({ kind: 'ins' as const, new: i + 1, text })));
-				return;
+				const lines = content.split('\n');
+				this.renderDiff(
+			card.contentEl,
+			  lines.slice(0, DIFF_MAX_LINES).map((text, i) => ({ kind: 'ins' as const, new: i + 1, text }))
+			 );
+			 if (lines.length > DIFF_MAX_LINES) {
+			  card.contentEl.createDiv({ cls: 'codem-chat-diff-trunc', text: `…（diff 已截断：仅显示前 ${DIFF_MAX_LINES} 行，共 ${lines.length} 行）` });
+			 }
+			 return;
 			}
 			const path = typeof raw.path === 'string' ? raw.path : '';
 			if (!path) return;
@@ -1487,6 +1539,23 @@ export class CodeMChatView extends ItemView {
 		modal.createEl('img', { attr: { src } });
 		const close = modal.createDiv({ cls: 'codem-chat-image-modal-close', text: '×' });
 		close.addEventListener('click', (e) => { e.stopPropagation(); overlay.remove(); });
+	}
+
+	/** 自动批准类（yolo/只读白名单/本会话记住）轮内聚合条：唯一沉底，按工具名计数不刷屏 */
+	private noteAutoApprove(st: RenderState, tab: ChatTab, toolName: string, label: string): void {
+		let note = st.yoloNote;
+		if (!note) {
+			const el = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
+			st.aiBlock.appendChild(el);
+			note = { el, counts: new Map(), total: 0, labels: new Set() };
+			st.yoloNote = note;
+		}
+		note.counts.set(toolName, (note.counts.get(toolName) ?? 0) + 1);
+		note.total++;
+		note.labels.add(label);
+		const parts = [...note.counts.entries()].map(([t, n]) => `${t} ×${n}`);
+		note.el.setText(`🔓 自动批准 ${note.total} 次（${[...note.labels].join('/')}）：${parts.join(' · ')}`);
+		this.scrollBottom(tab.scrollEl);
 	}
 
 	private handlePermission(
@@ -1543,32 +1612,24 @@ export class CodeMChatView extends ItemView {
 		if (!this.rememberedPerms) this.rememberedPerms = new Map<string, Set<string>>();
 		if (allowAlways && this.rememberedPerms.get(toolName)?.has('allow_always')) {
 			respond({ outcome: { outcome: 'selected', optionId: allowAlways.optionId } });
-			const el = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
-			el.setText(`🔓 本会话已记住：${toolName} 自动批准`);
-			st.aiBlock.appendChild(el);
-			this.scrollBottom(tab.scrollEl);
+			this.noteAutoApprove(st, tab, toolName, '本会话记住');
+			return;
+		}
+
+		// 只读工具白名单自动批准（settings 可关）：高频低风险工具免逐条弹窗打断
+		if (
+			allowOnce &&
+			this.plugin.settings.readonlyAutoApprove &&
+			READONLY_TOOLS.some((t) => toolName.toLowerCase().includes(t))
+		) {
+			respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
+			this.noteAutoApprove(st, tab, toolName, '只读白名单');
 			return;
 		}
 
 		if (this.yolo && allowOnce) {
 			respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
-			// 轮内聚合为唯一沉底状态条：多次批准按工具名计数，避免逐条刷屏
-			let note = st.yoloNote;
-			if (!note) {
-				const el = createEl('div', { cls: 'codem-chat-perm codem-chat-perm-auto' });
-				st.aiBlock.appendChild(el);
-				note = { el, counts: new Map(), total: 0 };
-				st.yoloNote = note;
-			}
-			note.counts.set(toolName, (note.counts.get(toolName) ?? 0) + 1);
-			note.total++;
-			if (note.total === 1) {
-				note.el.setText(`🤖 yolo 自动批准：${toolName}`);
-			} else {
-				const parts = [...note.counts.entries()].map(([t, n]) => `${t} ×${n}`);
-				note.el.setText(`🤖 yolo 自动批准 ${note.total} 次：${parts.join(' · ')}`);
-			}
-			this.scrollBottom(tab.scrollEl);
+			this.noteAutoApprove(st, tab, toolName, 'yolo');
 			return;
 		}
 		const bar = createEl('div', { cls: 'codem-chat-perm' });
@@ -1599,6 +1660,17 @@ export class CodeMChatView extends ItemView {
 				bar.dataset.answered = '1';
 				this.prunePending(st, toolCall?.toolCallId, bar);
 				respond({ outcome: { outcome: 'selected', optionId: reject.optionId } });
+				bar.remove();
+			};
+		}
+		// 一键开启 yolo 并批准备次请求：底部 YOLO 按钮不显眼，逐条审批时最容易够到的开关
+		if (allowOnce) {
+			const autoAll = bar.createEl('button', { text: '🤖 后续全自动', cls: 'codem-chat-perm-yolo' });
+			autoAll.onclick = () => {
+				if (!this.yolo) this.toggleYolo();
+				bar.dataset.answered = '1';
+				this.prunePending(st, toolCall?.toolCallId, bar);
+				respond({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
 				bar.remove();
 			};
 		}
@@ -1991,7 +2063,14 @@ export class CodeMChatView extends ItemView {
 			for (const b of t.blocks) {
 				if (b.kind === 'text') {
 					const segEl = aiBlock.createDiv({ cls: 'codem-chat-text markdown-rendered' });
-					segEl.appendChild(renderMarkdown(b.content));
+					// 超长段折叠（长会话载入一次性全渲染同样会卡）
+					if (b.content.length > SEG_COLLAPSE_LIMIT) {
+						const det = segEl.createEl('details', { cls: 'codem-chat-seg-fold' });
+						det.createEl('summary', { text: `📄 长内容（约 ${b.content.length} 字）已折叠，点击展开` });
+						det.appendChild(renderMarkdown(b.content));
+					} else {
+						segEl.appendChild(renderMarkdown(b.content));
+					}
 				}
 			}
 			const tools = t.blocks.filter((b) => b.kind === 'tool_use');
@@ -2017,7 +2096,21 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
+	/** 节流滚底：rAF 合并同帧多次调用；用户上翻（距底 >160px）时不抢滚动，保留阅读位置。
+	 *  原实现每次调用同步读写 scrollTop/scrollHeight，流式期间每 tick 一次强制布局（layout thrash） */
+	private scrollRaf = 0;
 	private scrollBottom(el?: HTMLElement): void {
+		const t = el ?? this.msgContainer;
+		if (this.scrollRaf) return;
+		this.scrollRaf = window.requestAnimationFrame(() => {
+			this.scrollRaf = 0;
+			if (t.scrollHeight - t.scrollTop - t.clientHeight > 160) return;
+			t.scrollTop = t.scrollHeight;
+		});
+	}
+
+	/** 强制立即滚底（发送/载入等关键节点，不受用户上翻限制） */
+	private forceScrollBottom(el?: HTMLElement): void {
 		const t = el ?? this.msgContainer;
 		t.scrollTop = t.scrollHeight;
 	}
