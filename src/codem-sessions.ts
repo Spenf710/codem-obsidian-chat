@@ -119,7 +119,9 @@ async function buildCard(sessionId: string, filePath: string, counts: Map<string
 			const t = obj.type as string;
 			if (t === 'header') {
 				if (typeof obj.cwd === 'string' && !cwd) cwd = obj.cwd;
-				if (typeof obj.session_source === 'string') source = obj.session_source;
+				// v1.0.11：真实字段是 taskSource（bot=飞书 / unknown=旧版或本地）；旧读的 session_source 在头部从未存在，全部落空显示「CLI」误导
+				if (typeof obj.taskSource === 'string') source = obj.taskSource;
+				if (!source && /^sess_feishu/.test(sessionId)) source = 'bot'; // 旧版飞书会话按文件名兜底
 			} else if (t === 'user_message') {
 				const raw = extractText(obj.content);
 				if (raw && !SYSTEM_INJECT.some((s) => raw.startsWith(s))) {

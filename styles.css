@@ -4373,31 +4373,56 @@ button.codem-chat-hist-archbtn:hover {
 	padding: 2px 0;
 }
 
-/* v1.0.10：复制按钮恢复 hover 淡入/淡出（挪入显示、挪出隐藏），位置保持输出底部单独一行左对齐；
-   用户消息时间戳移入操作行右端常驻显示（叶部基础规则 opacity:0 + .codem-chat-msg:hover 0.85 接管按钮显隐） */
+/* v1.0.11：按钮无底框（去边框/背景，纯图标），时间戳随按钮组一起 hover 淡入/淡出 */
 .codem-chat-root .codem-chat-msg-ops {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 4px;
 	margin-top: 6px;
-	min-height: 24px;
+	min-height: 20px;
+	/* v1.0.11：整行（含时间）默认隐藏，hover 消息时整行淡入 */
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+.codem-chat-root .codem-chat-msg:hover .codem-chat-msg-ops,
+.codem-chat-root .codem-chat-text:hover > .codem-chat-copy-btn {
+	opacity: 1;
 }
 .codem-chat-root .codem-chat-msg-ops > .codem-chat-copy-btn {
 	position: static !important;
 	visibility: visible !important;
+	border: none !important;
+	background: transparent !important;
+	box-shadow: none !important;
+	width: 20px;
+	height: 20px;
+	color: var(--text-faint);
 }
-/* 时间戳：操作行右端常驻（v1.0.10 从气泡上方移入） */
+.codem-chat-root .codem-chat-msg-ops > .codem-chat-copy-btn:hover {
+	color: var(--text-normal);
+	background: transparent !important;
+}
 .codem-chat-root .codem-chat-msg-ops .codem-chat-time {
 	margin-left: auto;
 	flex-shrink: 0;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-faint);
 }
-/* assistant 段级复制按钮：static 底部行 + hover 淡入（删 v1.0.9 的 opacity 强制，恢复叶部 hover 规则） */
+/* assistant 段级复制按钮：static 底部行 + 同样去框 + hover 淡入（叶部基础规则接管 opacity） */
 .codem-chat-root .codem-chat-text > .codem-chat-copy-btn {
 	position: static !important;
 	display: flex !important;
 	margin: 8px 0 0 !important;
+	border: none !important;
+	background: transparent !important;
+	box-shadow: none !important;
+	width: 20px;
+	height: 20px;
+	color: var(--text-faint);
+}
+.codem-chat-root .codem-chat-text > .codem-chat-copy-btn:hover {
+	color: var(--text-normal);
+	background: transparent !important;
 }
 
 /* ===== v1.0.1 工具卡保底样式（强制生效，防止叶部 CSS 选择器未命中） ===== */

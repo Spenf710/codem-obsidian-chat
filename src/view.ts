@@ -1645,12 +1645,12 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	private renderUserMessage(text: string, images: PendingImage[], into?: HTMLElement): HTMLElement {
+	private renderUserMessage(text: string, images: PendingImage[], into?: HTMLElement, timeText?: string): HTMLElement {
 		// 行容器：气泡 + 气泡外侧的时间戳（时间戳不放进深色气泡内，避免看不清）
 		// v1.0.8 P0-1：into 指定落点容器（历史载入防切 tab 串台），默认当前 tab
 		const row = (into ?? this.msgContainer).createDiv({ cls: 'codem-chat-msg codem-chat-user-row' });
-		// 消息时间戳（HH:MM）：v1.0.10 移到底部操作行右对齐（常驻）
-		const now = new Date();
+		// 消息时间戳（HH:MM）：v1.0.10 移到底部操作行右对齐；v1.0.11 改为可选参数（历史会话传原始记录时间）
+		const now = timeText ? new Date(timeText) : new Date();
 		const hh = String(now.getHours()).padStart(2, '0');
 		const mm = String(now.getMinutes()).padStart(2, '0');
 		const userBlock = row.createDiv({ cls: 'codem-chat-user' });
@@ -2740,7 +2740,7 @@ export class CodeMChatView extends ItemView {
 	private renderHistRows(list: HTMLElement, items: SessionCard[], archived: Set<string>): void {
 		items.forEach((c) => {
 			const i = this.histItems.indexOf(c);
-			const src = c.source === 'bot' ? '飞书' : c.source === 'tui' ? '终端' : 'CLI';
+			const src = c.source === 'bot' ? '飞书' : '本地';
 			const turnTxt = c.userTurns > 0 ? ` · ${c.userTurns}问` : '';
 			const row = list.createDiv({ cls: 'codem-suggest-item' + (i === this.histIndex ? ' is-active' : '') });
 			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src}${turnTxt}` });
@@ -2916,7 +2916,7 @@ export class CodeMChatView extends ItemView {
 			const mc = into ?? this.msgContainer; // v1.0.8 P0-1：落点跟随发起 tab 的容器，防切 tab 串写
 			if (t.role === 'user') {
 			// jsonl 记录的是完整 prompt（含注入全文/快照/图片 base64），回显前清洗为提问本身
-		const userBlock = this.renderUserMessage(this.cleanPromptForDisplay(t.blocks.map((b) => b.content).join('\n\n')), [], mc);
+		const userBlock = this.renderUserMessage(this.cleanPromptForDisplay(t.blocks.map((b) => b.content).join('\n\n')), [], mc, t.timestamp);
 		 this.addTurnAnchor(userBlock);
 			} else if (t.role === 'assistant') {
 			const aiBlock = mc.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
