@@ -370,8 +370,6 @@ export class CodeMChatView extends ItemView {
 		});
 
 	// tab 行在输入框外面（上方）：左 tab 组，右功能图标组
-	// v1.0.2 P1：补齐功能按钮（搜索/导出/保存为笔记/设置）
-	let reasonEl: HTMLElement | null = null; // 推理 chip 引用（v1.0.2 P2）
 	const tabRow = root.createDiv({ cls: 'codem-chat-tabrow' });
 	this.tabsEl = tabRow.createDiv({ cls: 'codem-chat-tabs' });
 	const tabActions = tabRow.createDiv({ cls: 'codem-chat-actions' });
@@ -479,14 +477,7 @@ export class CodeMChatView extends ItemView {
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
 		// 智能 chip：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
 		this.buildOptChip(chips, '智能', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
-		// 推理 chip（v1.0.2 P2）：标注「自定义模型专用」——预置模型用智能档，推理档无效
-		this.buildOptChip(chips, '推理', 'codem-chat-reasoning', ['minimal', 'low', 'medium', 'high', 'max'], () => this.modelOpts.reasoning, (v) => (this.modelOpts.reasoning = v));
-		const reasonChip = chips.querySelector('.codem-chat-reasoning') as HTMLElement | null;
-		if (reasonChip) {
-			reasonChip.setAttribute('title', '推理强度（仅对自定义模型生效；预置模型请用「智能」档）');
-			reasonChip.setAttribute('aria-label', '推理强度：自定义模型专用，预置模型请用智能档');
-			reasonEl = reasonChip; // 保存引用供后续透明度调整
-		}
+		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
 		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
 		planBtn.createSpan({ cls: 'codem-chat-chip-inner', text: '📋 Plan' });
@@ -2816,7 +2807,27 @@ export class CodeMChatView extends ItemView {
 				);
 			}
 			this.msgContainer.empty();
-			for (const t of turns) this.renderHistoryTurn(t);
+			// v1.0.4：tool_result 并入前一个 tool_use 卡片——结果跟卡片走（叶部/Claudian 同构），
+			// 消灭游离的裸奔「工具结果」行；跨用户消息不配对，配不上保留原样兜底
+			const merged: Turn[] = [];
+			for (const t of turns) {
+			 const isResult = t.role === 'tool' && t.blocks.length === 1 && t.blocks[0].kind === 'tool_result';
+			 if (isResult && merged.length) {
+			  let attached = false;
+			  for (let k = merged.length - 1; k >= 0; k--) {
+			   if (merged[k].role === 'user') break; // 不跨用户消息配对
+			   const tu = [...merged[k].blocks].reverse().find((b) => b.kind === 'tool_use');
+			   if (tu) {
+			    tu.content += '\n——— 结果 ———\n' + t.blocks[0].content;
+			    attached = true;
+			    break;
+			   }
+			  }
+			  if (attached) continue;
+			 }
+			 merged.push(t);
+			}
+			for (const t of merged) this.renderHistoryTurn(t);
 			if (!turns.length) this.renderEmpty();
 			const head = this.msgContainer.createDiv({ cls: 'codem-chat-history-head' });
 			const src = card.source === 'bot' ? '飞书' : card.source === 'tui' ? '终端' : 'CLI';
