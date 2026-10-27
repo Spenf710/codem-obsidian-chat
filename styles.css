@@ -4471,3 +4471,9 @@ button.codem-chat-copy-btn.codem-chat-quote-btn {
 	color: var(--text-faint) !important;
 	word-break: break-all !important;
 }
+
+/* v1.0.5 字号对齐：用户 Obsidian 正文字号设置可能大于叶部运行环境的默认值，
+   显式固定消息区字号脱离主题变量（叶部 CSS fallback 即 16px），与叶部视觉一致 */
+.codem-chat-root .codem-chat-msg {
+	font-size: 16px !important;
+}

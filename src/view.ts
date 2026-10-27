@@ -459,24 +459,25 @@ export class CodeMChatView extends ItemView {
 		const permInner = this.permBtn.createSpan({ cls: 'codem-chat-chip-inner' });
 		this.permLabelEl = permInner.createSpan({ cls: 'codem-chat-chip-value' });
 		permInner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
-		this.permBtn.setAttribute('aria-label', '权限模式：手动 / 智能 / YOLO，点击选择');
+		this.permBtn.setAttribute('aria-label', '权限模式：请求批准 / 帮我批准 / 完全访问，点击选择');
 		this.permBtn.onclick = (e) => {
 			const menu = new Menu();
-			const modes: Array<{ mode: 'manual' | 'smart' | 'yolo'; title: string }> = [
-				{ mode: 'manual', title: '🔒 手动：逐次确认' },
-				{ mode: 'smart', title: '✨ 智能：只读工具自动批准' },
-				{ mode: 'yolo', title: '🤖 YOLO：全部自动批准' },
+			// v1.0.5：按 CodeM 原生客户端命名（截屏确认：请求批准 / 帮我批准 / 完全访问）
+			const modes: Array<{ mode: 'manual' | 'smart' | 'yolo'; title: string; icon: string }> = [
+				{ mode: 'manual', title: '请求批准', icon: 'shield' },
+				{ mode: 'smart', title: '帮我批准', icon: 'shield-check' },
+				{ mode: 'yolo', title: '完全访问', icon: 'zap' },
 			];
 			for (const it of modes) {
 				menu.addItem((mi) =>
-					mi.setTitle(it.title).setChecked(this.permMode === it.mode).onClick(() => this.setPermMode(it.mode))
+					mi.setTitle(it.title).setIcon(it.icon).setChecked(this.permMode === it.mode).onClick(() => this.setPermMode(it.mode))
 				);
 			}
 			menu.showAtMouseEvent(e);
 		};
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
-		// 智能 chip：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
-		this.buildOptChip(chips, '智能', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
+		// 智能强度 chip（v1.0.5 对齐原生命名）：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
+		this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
 		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
 		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
@@ -1052,9 +1053,9 @@ export class CodeMChatView extends ItemView {
 	private setPermMode(mode: 'manual' | 'smart' | 'yolo'): void {
 		this.permMode = mode;
 		const labels: Record<'manual' | 'smart' | 'yolo', string> = {
-			manual: '🔒 手动',
-			smart: '✨ 智能',
-			yolo: '🤖 YOLO',
+			manual: '请求批准',
+			smart: '帮我批准',
+			yolo: '完全访问',
 		};
 		this.permLabelEl?.setText(labels[mode]);
 		this.permBtn.toggleClass('is-active', mode === 'yolo');
@@ -1629,28 +1630,28 @@ export class CodeMChatView extends ItemView {
 			this.linkifyWikilinks(body);
 			this.decorateCodeBlocks(body);
 		}
-		// v0.7.1（叶部式）：用户消息 hover 复制按钮
+		// v1.0.5：消息 hover 操作按钮统一 lucide SVG 图标（copy/pencil/quote，与叶部/原生一致）
 		if (text) {
-			const copyBtn = row.createEl('button', { cls: 'codem-chat-copy-btn', text: '📋' });
+			const copyBtn = row.createEl('button', { cls: 'codem-chat-copy-btn' });
+			setIcon(copyBtn, 'copy');
 			copyBtn.setAttribute('aria-label', '复制此消息');
 			copyBtn.onclick = (e) => {
 				e.stopPropagation();
 				void navigator.clipboard.writeText(text).then(() => {
-					copyBtn.setText('✅');
-					window.setTimeout(() => copyBtn.setText('📋'), 1500);
+					setIcon(copyBtn, 'check');
+					window.setTimeout(() => setIcon(copyBtn, 'copy'), 1500);
 				});
 			};
-		}
-		// v0.9.0（叶部式）：编辑回填 ✎ + 引用 ❝
-		if (text) {
-			const editBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-edit-btn', text: '✎' });
+			const editBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-edit-btn' });
+			setIcon(editBtn, 'pencil');
 			editBtn.setAttribute('aria-label', '编辑此消息（回填输入框）');
 			editBtn.onclick = (e) => {
 				e.stopPropagation();
 				this.inputEl.value = text;
 				this.inputEl.focus();
 			};
-			const quoteBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-quote-btn', text: '❝' });
+			const quoteBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-quote-btn' });
+			setIcon(quoteBtn, 'quote');
 			quoteBtn.setAttribute('aria-label', '引用此消息');
 			quoteBtn.onclick = (e) => {
 				e.stopPropagation();
@@ -2011,13 +2012,13 @@ export class CodeMChatView extends ItemView {
 		this.decorateCodeBlocks(seg.el);
 		// hover 复制按钮（Claudian 式：浮在文本段右下角，hover 才出现）
 		const copyBtn = seg.el.createEl('button', { cls: 'codem-chat-copy-btn' });
+		setIcon(copyBtn, 'copy');
 		copyBtn.setAttribute('aria-label', '复制此段');
-		copyBtn.setText('📋 复制');
 		copyBtn.onclick = (e) => {
 			e.stopPropagation();
 			void navigator.clipboard.writeText(seg.buf).then(() => {
-				copyBtn.setText('✅ 已复制');
-				window.setTimeout(() => copyBtn.setText('📋 复制'), 1500);
+				setIcon(copyBtn, 'check');
+				window.setTimeout(() => setIcon(copyBtn, 'copy'), 1500);
 			});
 		};
 	}
@@ -2889,6 +2890,17 @@ export class CodeMChatView extends ItemView {
 					segEl.appendChild(renderMarkdown(b.content));
 					}
 				this.decorateCodeBlocks(segEl);
+				// v1.0.5：历史会话文本段复制按钮（与实时对话一致，hover 显示）
+				const hCopy = segEl.createEl('button', { cls: 'codem-chat-copy-btn' });
+				setIcon(hCopy, 'copy');
+				hCopy.setAttribute('aria-label', '复制此段');
+				hCopy.onclick = (e) => {
+					e.stopPropagation();
+					void navigator.clipboard.writeText(b.content).then(() => {
+						setIcon(hCopy, 'check');
+						window.setTimeout(() => setIcon(hCopy, 'copy'), 1500);
+					});
+				};
 			}
 			}
 			// v1.0.2：工具卡 DOM 对齐叶部——每张工具卡独立 details.is-*，同实时对话
