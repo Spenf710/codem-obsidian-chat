@@ -2873,7 +2873,7 @@ export class CodeMChatView extends ItemView {
 			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
 			if (!turns.length) this.renderEmpty(tab.scrollEl);
 			const head = tab.scrollEl.createDiv({ cls: 'codem-chat-history-head' });
-			const src = card.source === 'bot' ? '飞书' : card.source === 'tui' ? '终端' : 'CLI';
+			const src = card.source === 'bot' ? '飞书' : '本地';
 			head.setText(
 				`📜 ${this.sessionTitle(card).slice(0, 40)}（${src} · ${card.userTurns} 问）` +
 					(tab.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
