@@ -1431,7 +1431,8 @@ export class CodeMChatView extends ItemView {
 		}
 		const cps = this.readCheckpoints(card.filePath);
 		if (!cps.length) {
-			new Notice('该会话没有快照记录');
+			// 探针实证：checkpoint 仅由 CodeM 在终端/飞书会话修改文件时记录；插件内 ACP 会话不写快照事件
+			new Notice('该会话没有快照——快照仅在终端/飞书发起的会话修改文件时产生，插件内发起的会话不记录。可从历史面板载入对应会话后对其回滚', 6000);
 			return;
 		}
 		const menu = new Menu();
