@@ -214,6 +214,8 @@ export class CodeMChatView extends ItemView {
 	private permBtn!: HTMLButtonElement;
 	/** 权限 chip 的文案 span（v0.5.2：紧凑短词 + ▾，与智能/推理 chip 同构） */
 	private permLabelEl: HTMLElement | null = null;
+	/** 权限 chip 的图标 span（v1.0.6：对齐原生，随模式切换 shield/shield-check/zap） */
+	private permIconEl: HTMLElement | null = null;
 	/** 信息行会话标题 span（v0.6.1：叶部 info-title，AI 标题/首问溢出省略） */
 	private infoTitleEl: HTMLElement | null = null;
 	/** ctx-meter 用量指示 span（v0.7.0 叶部式：上下文窗口 token 占比估算） */
@@ -457,6 +459,8 @@ export class CodeMChatView extends ItemView {
 		// v0.6.5：方案 F（对照实验唯一零错位）——全部内容包进内层 flex span，基线由 flex 强制，免疫 emoji 大行盒
 		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-perm', attr: { type: 'button' } });
 		const permInner = this.permBtn.createSpan({ cls: 'codem-chat-chip-inner' });
+		// v1.0.6：chip 带图标（对齐原生：shield 请求批准 / shield-check 帮我批准 / zap 完全访问）
+		this.permIconEl = permInner.createSpan({ cls: 'codem-chat-chip-icon' });
 		this.permLabelEl = permInner.createSpan({ cls: 'codem-chat-chip-value' });
 		permInner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		this.permBtn.setAttribute('aria-label', '权限模式：请求批准 / 帮我批准 / 完全访问，点击选择');
@@ -1049,7 +1053,7 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	/** 设置权限模式：chip 文案同步（v0.6.4 回归叶部实现：emoji+文字，无 SVG 图标）；YOLO 激活态背景高亮 */
+	/** 设置权限模式：chip 图标+文案同步（v1.0.6 对齐原生：shield/shield-check/zap + 原生命名）；完全访问激活态高亮 */
 	private setPermMode(mode: 'manual' | 'smart' | 'yolo'): void {
 		this.permMode = mode;
 		const labels: Record<'manual' | 'smart' | 'yolo', string> = {
@@ -1057,7 +1061,16 @@ export class CodeMChatView extends ItemView {
 			smart: '帮我批准',
 			yolo: '完全访问',
 		};
+		const icons: Record<'manual' | 'smart' | 'yolo', string> = {
+			manual: 'shield',
+			smart: 'shield-check',
+			yolo: 'zap',
+		};
 		this.permLabelEl?.setText(labels[mode]);
+		if (this.permIconEl) setIcon(this.permIconEl, icons[mode]);
+		// 图标配色对齐原生：帮我批准=绿盾，完全访问=橙，请求批准=中性灰
+		this.permBtn.removeClass('is-manual', 'is-smart', 'is-yolo');
+		this.permBtn.addClass('is-' + mode);
 		this.permBtn.toggleClass('is-active', mode === 'yolo');
 	}
 

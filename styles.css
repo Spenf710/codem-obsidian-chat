@@ -4477,3 +4477,24 @@ button.codem-chat-copy-btn.codem-chat-quote-btn {
 .codem-chat-root .codem-chat-msg {
 	font-size: 16px !important;
 }
+
+/* v1.0.6 权限 chip 图标（对齐 CodeM 原生：灰盾/绿盾✓/橙⚡） */
+.codem-chat-chip-icon {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+}
+.codem-chat-chip-icon svg {
+	width: 14px;
+	height: 14px;
+	display: block;
+}
+.codem-chat-perm.is-manual .codem-chat-chip-icon {
+	color: var(--text-muted);
+}
+.codem-chat-perm.is-smart .codem-chat-chip-icon {
+	color: var(--text-success);
+}
+.codem-chat-perm.is-yolo .codem-chat-chip-icon {
+	color: var(--text-warning, #e67e22);
+}
