@@ -108,11 +108,9 @@ async function buildCard(sessionId: string, filePath: string, counts: Map<string
 		const { bytesRead } = await fh.read(buf, 0, 65536, 0);
 		await fh.close();
 		const text = buf.toString('utf8', 0, bytesRead);
-		// v1.0.12：taskSource 在文件头部的多行大 JSON 元数据块（wrapper）里，逐行 JSON.parse 读不到
-		// （wrapper 每行只是 JSON 片段）——文本级正则直接提取；sess_feishu_* 文件名优先归飞书（含旧版 unknown）
-		const tsMatch = text.match(/"taskSource"\s*:\s*"([^"]+)"/);
-		if (tsMatch) source = tsMatch[1];
-		if (/^sess_feishu/.test(sessionId)) source = 'bot';
+		// v1.0.14：真字段是 jsonl header 事件行的 session_source（bot=飞书/tui=终端/app=客户端/subagent=子代理）；
+		// v1.0.11~13 曾误读 wrapper json 的 taskSource（buildCard 处理的是 .jsonl，该字段不在其中）——恢复原读取
+		if (/^sess_feishu/.test(sessionId)) source = 'bot'; // 旧版飞书会话按文件名兑底
 		for (const line of text.split('\n')) {
 			if (!line.trim()) continue;
 			let obj: Record<string, unknown>;
@@ -124,6 +122,8 @@ async function buildCard(sessionId: string, filePath: string, counts: Map<string
 			const t = obj.type as string;
 			if (t === 'header') {
 				if (typeof obj.cwd === 'string' && !cwd) cwd = obj.cwd;
+				// v1.0.14：恢复 session_source 读取（jsonl header 事件行原生字段，v1.0.11 误删）
+				if (typeof obj.session_source === 'string') source = obj.session_source;
 			} else if (t === 'user_message') {
 				const raw = extractText(obj.content);
 				if (raw && !SYSTEM_INJECT.some((s) => raw.startsWith(s))) {

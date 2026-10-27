@@ -155,6 +155,18 @@ const OPT_LABELS: Record<string, string> = {
 	'max': '最大',
 };
 
+/** v1.0.14：会话来源显示——jsonl header 的 session_source 四值精确映射；
+ *  无标记且 cwd 是 vault 的启发式归 Obsidian 插件（ACP 会话不写 source 字段）；
+ *  实证分布（全盘 86 个 jsonl）：bot=21 飞书 / tui=53 终端 / app=10 客户端 / subagent=2 子代理 */
+function sourceLabel(c: SessionCard): string {
+	if (c.source === 'bot' || /^sess_feishu/.test(c.sessionId)) return '飞书';
+	if (c.source === 'tui') return '终端';
+	if (c.source === 'app') return '客户端';
+	if (c.source === 'subagent') return '子代理';
+	if (!c.source && /Obsidian Vault/i.test(c.cwd)) return 'Obsidian插件';
+	return '本地';
+}
+
 /** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
 interface SuggestItem {
 	label: string;
@@ -2740,7 +2752,7 @@ export class CodeMChatView extends ItemView {
 	private renderHistRows(list: HTMLElement, items: SessionCard[], archived: Set<string>): void {
 		items.forEach((c) => {
 			const i = this.histItems.indexOf(c);
-			const src = c.source === 'bot' ? '飞书' : '本地';
+			const src = sourceLabel(c);
 			const turnTxt = c.userTurns > 0 ? ` · ${c.userTurns}问` : '';
 			const row = list.createDiv({ cls: 'codem-suggest-item' + (i === this.histIndex ? ' is-active' : '') });
 			row.createSpan({ cls: 'codem-suggest-label', text: `${formatTime(c.lastTime)} · ${src}${turnTxt}` });
@@ -2873,7 +2885,7 @@ export class CodeMChatView extends ItemView {
 			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
 			if (!turns.length) this.renderEmpty(tab.scrollEl);
 			const head = tab.scrollEl.createDiv({ cls: 'codem-chat-history-head' });
-			const src = card.source === 'bot' ? '飞书' : '本地';
+			const src = sourceLabel(card);
 			head.setText(
 				`📜 ${this.sessionTitle(card).slice(0, 40)}（${src} · ${card.userTurns} 问）` +
 					(tab.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
