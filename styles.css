@@ -4498,3 +4498,18 @@ button.codem-chat-copy-btn.codem-chat-quote-btn {
 .codem-chat-perm.is-yolo .codem-chat-chip-icon {
 	color: var(--text-warning, #e67e22);
 }
+
+/* v1.0.7 历史会话可复制修复：
+   叶部 CSS 的 user-select: text 保护绑定 .codem-chat-messages 容器（行1079），
+   我们的消息容器类名是 .codem-chat-msgarea——规则不命中，部分主题下文本选不中；
+   显式对消息条目及其后代开选择，划词/右键/Ctrl+C 复制恢复 */
+.codem-chat-root .codem-chat-msg,
+.codem-chat-root .codem-chat-msg * {
+	user-select: text !important;
+	-webkit-user-select: text !important;
+}
+/* v1.0.7 复制按钮定位：.codem-chat-text 必须 positioned，
+   否则按钮 absolute 相对更外层定位，飘到消息块右上角且多段按钮叠死 */
+.codem-chat-root .codem-chat-text {
+	position: relative;
+}
