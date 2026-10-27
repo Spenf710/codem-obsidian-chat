@@ -268,7 +268,7 @@ export class CodeMChatView extends ItemView {
 	private lightEl: HTMLElement | null = null;
 
 	/** 排队发送的条目（Agent 执行中用户提交的消息不会被丢弃） */
-	private inputQueue: { prompt: string; images: PendingImage[] }[] = [];
+	private inputQueue: { prompt: string; images: PendingImage[]; tab: ChatTab }[] = [];
 
 	/** 输入历史（最近 50 条已发送 prompt，输入框空时 ↑↓ 回溯；本次会话内有效） */
 	private promptHistory: string[] = [];
@@ -615,8 +615,8 @@ export class CodeMChatView extends ItemView {
 		this.client = null;
 	}
 
-	private renderEmpty(): void {
-		const el = this.msgContainer.createDiv({ cls: 'codem-chat-empty' });
+	private renderEmpty(into?: HTMLElement): void {
+		const el = (into ?? this.msgContainer).createDiv({ cls: 'codem-chat-empty' });
 		el.setText('正在检查 CodeM 环境…');
 		void this.renderEmptyContent(el);
 	}
@@ -1284,7 +1284,8 @@ export class CodeMChatView extends ItemView {
 		const steerBtn = headBtns.createEl('button', { text: '⚡ Steer', cls: 'codem-chat-queue-steer' });
 		steerBtn.setAttribute('aria-label', '停止当前任务并立刻发出队首消息');
 		steerBtn.onclick = () => {
-			if (!this.activeTab.busy || !this.inputQueue.length) return;
+			// v1.0.8 P0-3：只 Steer 当前 tab 自己的排队条目（finally 按 tab 归属消费）
+			if (!this.activeTab.busy || !this.inputQueue.some((q) => q.tab === this.activeTab)) return;
 			this.stopActiveTurn(); // cancel → reason='cancelled' → finally 不恢复（队列保留）→ shift 自动发队首
 		};
 		// 清空：全部排队项丢弃（不影响输入框当前草稿）
@@ -1298,7 +1299,11 @@ export class CodeMChatView extends ItemView {
 		const list = this.queueEl.createDiv({ cls: 'codem-chat-queue-list', attr: { role: 'list' } });
 		this.inputQueue.forEach((item, idx) => {
 			const row = list.createDiv({ cls: 'codem-chat-queue-item', attr: { role: 'listitem' } });
-			row.createSpan({ cls: 'codem-chat-queue-item-text', text: item.prompt.slice(0, 80) || '（图片）' });
+			// v1.0.8 P0-3：多 tab 混排时标注归属会话
+			row.createSpan({
+				cls: 'codem-chat-queue-item-text',
+				text: `[${item.tab.label ?? `会话${item.tab.id}`}] ` + (item.prompt.slice(0, 80) || '（图片）'),
+			});
 			const btns = row.createDiv({ cls: 'codem-chat-queue-item-actions' });
 			const mkBtn = (label: string, title: string, fn: () => void, disabled = false): void => {
 				const b = btns.createEl('button', { text: label, cls: 'codem-chat-queue-move' });
@@ -1322,7 +1327,9 @@ export class CodeMChatView extends ItemView {
 			}, idx === this.inputQueue.length - 1);
 			mkBtn('✎', '撤回输入框编辑', () => {
 				this.inputQueue.splice(idx, 1);
-				this.inputEl.value = (this.inputEl.value ? this.inputEl.value + '\n' : '') + item.prompt;
+				// v1.0.8 P0-3：回填到归属 tab（切过去），防草稿串进别的会话
+				 if (this.activeTab !== item.tab) this.switchTab(item.tab);
+				 this.inputEl.value = (this.inputEl.value ? this.inputEl.value + '\n' : '') + item.prompt;
 				// 图片也回填到预览区
 				if (item.images.length) {
 					this.activeTab.images.push(...item.images);
@@ -1347,7 +1354,7 @@ export class CodeMChatView extends ItemView {
 
 		// Agent 执行中：入队等待而非拒绝输入
 		if (tab.busy) {
-			this.inputQueue.push({ prompt: rawPrompt, images: tab.images.slice() });
+			this.inputQueue.push({ prompt: rawPrompt, images: tab.images.slice(), tab });
 			tab.images = [];
 			this.inputEl.value = '';
 			tab.draft = '';
@@ -1480,6 +1487,8 @@ export class CodeMChatView extends ItemView {
 			regenBtn.setAttribute('aria-label', '用同样的提问重新生成回复');
 			regenBtn.onclick = () => {
 				if (tab.busy) return;
+				// v1.0.8 P0-2：切回归属 tab 再发，否则 send() 会把消息发进当前激活会话
+				if (this.activeTab !== tab) this.switchTab(tab);
 				this.inputEl.value = rawPrompt;
 				void this.send();
 			};
@@ -1520,6 +1529,8 @@ export class CodeMChatView extends ItemView {
 			retryBtn.setAttribute('aria-label', '重试上一条消息');
 			retryBtn.onclick = () => {
 				if (tab.busy) return;
+				// v1.0.8 P0-2：切回归属 tab 再发，否则 send() 会把消息发进当前激活会话
+				if (this.activeTab !== tab) this.switchTab(tab);
 				errBlock.remove();
 				userBlock.removeClass('codem-chat-undelivered');
 				userBlock.querySelector('.codem-chat-undelivered-note')?.remove();
@@ -1544,29 +1555,25 @@ export class CodeMChatView extends ItemView {
 				this.lightEl.addClass('is-' + (tab === this.activeTab ? finalLight : tab.light));
 			}
 			this.scrollBottom(tab.scrollEl);
-			// 消费排队中的下一条消息
-			if (this.inputQueue.length > 0) {
-				if (wasCancelled) {
-					// v0.8.0（叶部式）：用户停止 → 排队消息回填输入框（不丢、可编辑），不自动续发
-					const next = this.inputQueue.shift()!;
+			// 消费排队中的下一条消息（v1.0.8 P0-3：只消费归属本 tab 的条目，多 tab 排队互不干扰）
+			const nextIdx = this.inputQueue.findIndex((it) => it.tab === tab);
+				if (nextIdx >= 0) {
+					const next = this.inputQueue.splice(nextIdx, 1)[0];
+					// 回填/发送都在发起排队的 tab：消息必须进它的会话
 					if (this.activeTab !== tab) this.switchTab(tab);
 					tab.images = next.images;
 					this.inputEl.value = next.prompt;
 					tab.draft = next.prompt;
 					this.renderPreviews();
-				} else {
-					// 正常完成：自动发送下一条
-					const next = this.inputQueue.shift()!;
-					// 如果当前不在发起排队的 tab 上，切回去再发
-					if (this.activeTab !== tab) this.switchTab(tab);
-					tab.images = next.images;
-					this.inputEl.value = next.prompt;
-					tab.draft = next.prompt;
-					this.renderPreviews();
-					window.setTimeout(() => void this.send(), 200);
-				}
-				this.renderQueuePanel();
-			}
+				if (!wasCancelled) {
+					// 正常完成：自动发送下一条；用户停止（v0.8.0 叶部式）→ 只回填不自动续发
+					window.setTimeout(() => {
+					// v1.0.8：200ms 窗口内又切走则不自动发（草稿已回填到归属 tab）
+					if (this.activeTab === tab) void this.send();
+					}, 200);
+					}
+					this.renderQueuePanel();
+					}
 		}
 	}
 
@@ -1628,9 +1635,10 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	private renderUserMessage(text: string, images: PendingImage[]): HTMLElement {
+	private renderUserMessage(text: string, images: PendingImage[], into?: HTMLElement): HTMLElement {
 		// 行容器：气泡 + 气泡外侧的时间戳（时间戳不放进深色气泡内，避免看不清）
-		const row = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-user-row' });
+		// v1.0.8 P0-1：into 指定落点容器（历史载入防切 tab 串台），默认当前 tab
+		const row = (into ?? this.msgContainer).createDiv({ cls: 'codem-chat-msg codem-chat-user-row' });
 		// 消息时间戳（HH:MM）：气泡上方、左对齐——DOM 排在气泡前（column 布局在上），行容器内左对齐
 		const now = new Date();
 		const hh = String(now.getHours()).padStart(2, '0');
@@ -2758,30 +2766,33 @@ export class CodeMChatView extends ItemView {
 
 	/** 载入历史会话：jsonl 回显 + ACP session/load 原生续接；失败自动转软续接（快照上下文） */
 	private async loadHistory(card: SessionCard): Promise<void> {
+		// v1.0.8 P0-1：捕获发起 tab——全程用 tab.* 局部引用替代 activeTab getter，
+		// 异步载入期间用户切 tab 不再释放/覆盖/渲染到错误的 tab
+		const tab = this.activeTab;
 		// 会话唯一持有：目标会话已在其他 tab 打开 → 直接切换过去，禁止双开。
 		// 双开会使两个 tab 持有同一 sessionId：update/permission 按 find 首个匹配路由到旧 tab，
 		// 表现为新窗口内容串台、权限请求找不到渲染状态被默认取消；busy 会话还会被 closeSession 误杀
-		const holder = this.tabs.find((t) => t !== this.activeTab && t.sessionId === card.sessionId);
+		const holder = this.tabs.find((t) => t !== tab && t.sessionId === card.sessionId);
 		if (holder) {
 			new Notice('该会话已在另一个窗口打开，已为你切换过去');
 			this.switchTab(holder);
 			return;
 		}
-		this.busy = true;
-		this.msgContainer.empty();
+		tab.busy = true;
+		tab.scrollEl.empty();
 		this.resetTurnNav();
-		this.msgContainer.createDiv({ cls: 'codem-chat-empty', text: '载入历史会话…' });
+		tab.scrollEl.createDiv({ cls: 'codem-chat-empty', text: '载入历史会话…' });
 		try {
 			const turns = await readCodemSessionTurns(card.filePath);
 			const client = await this.ensureClient();
 			// cwd 必须传会话自己的原始 cwd（探针实测：会话按 cwd hash 隔离，传错目录报 does not exist）；
 			// 换会话前先释放本连接持有的旧会话（daemon 层 writer 占位会堵死旧会话下次 load）
-			if (this.sessionId && this.sessionId !== card.sessionId) {
-				this.releaseSession();
+			if (tab.sessionId && tab.sessionId !== card.sessionId) {
+				this.releaseSession(tab);
 			}
 			let loaded = false;
 			let lastErr = '';
-			if (this.sessionId === card.sessionId) {
+			if (tab.sessionId === card.sessionId) {
 				// 同一会话且当前连接仍持有 → 无需重新 load，秒开
 				loaded = true;
 			}
@@ -2807,20 +2818,20 @@ export class CodeMChatView extends ItemView {
 				}
 			}
 			if (loaded) {
-				this.sessionId = card.sessionId;
-				this.pendingContext = null;
-				this.updateSidEl();
+				tab.sessionId = card.sessionId;
+				tab.pendingContext = null;
+				if (tab === this.activeTab) this.updateSidEl();
 			} else {
 				// 软续接兜底：原生 load 失败（被占用/不可载入）时，把历史轮次做成快照，
 				// 随下一条用户消息注入新会话，保证任何会话都能接着聊
-				this.sessionId = null;
-				this.pendingContext = this.buildContextSnapshot(turns);
+				tab.sessionId = null;
+				tab.pendingContext = this.buildContextSnapshot(turns);
 				new Notice(
 					(/active writer/i.test(lastErr) ? '该会话正被其他 CodeM 入口占用，' : '无法原生续接，') +
 						'已转为快照续聊：历史对话将作为上下文随你下一条消息附带'
 				);
 			}
-			this.msgContainer.empty();
+			tab.scrollEl.empty();
 			// v1.0.4：tool_result 并入前一个 tool_use 卡片——结果跟卡片走（叶部/Claudian 同构），
 			// 消灭游离的裸奔「工具结果」行；跨用户消息不配对，配不上保留原样兜底
 			const merged: Turn[] = [];
@@ -2841,20 +2852,25 @@ export class CodeMChatView extends ItemView {
 			 }
 			 merged.push(t);
 			}
-			for (const t of merged) this.renderHistoryTurn(t);
-			if (!turns.length) this.renderEmpty();
-			const head = this.msgContainer.createDiv({ cls: 'codem-chat-history-head' });
+			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
+			if (!turns.length) this.renderEmpty(tab.scrollEl);
+			const head = tab.scrollEl.createDiv({ cls: 'codem-chat-history-head' });
 			const src = card.source === 'bot' ? '飞书' : card.source === 'tui' ? '终端' : 'CLI';
 			head.setText(
 				`📜 ${this.sessionTitle(card).slice(0, 40)}（${src} · ${card.userTurns} 问）` +
-					(this.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
+					(tab.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
 			);
-			this.msgContainer.scrollTop = this.msgContainer.scrollHeight;
+			tab.scrollEl.scrollTop = tab.scrollEl.scrollHeight;
 		} finally {
-			this.busy = false;
+			tab.busy = false;
 			// busy 复位后再同步状态灯/输入框提示：setStatusLight 内部的 syncStopUi 读 busy，
 			// 放在 try 内会让 placeholder 写成"执行中"后不再刷新（打开历史会话后输入框卡"执行中"）
-			this.setStatusLight('idle');
+			// v1.0.8 P0-1：载入期间已切走 → 只复位捕获 tab 的灯，不动当前 tab 的状态
+			if (tab === this.activeTab) this.setStatusLight('idle');
+			else {
+				tab.light = 'idle';
+				this.renderTabs();
+			}
 		}
 	}
 
@@ -2878,13 +2894,14 @@ export class CodeMChatView extends ItemView {
 	}
 
 	/** v1.0.2 P0：历史会话渲染——DOM 对齐叶部 CSS（与实时对话 handleToolEvent 同构） */
-		private renderHistoryTurn(t: Turn): void {
+		private renderHistoryTurn(t: Turn, into?: HTMLElement): void {
+			const mc = into ?? this.msgContainer; // v1.0.8 P0-1：落点跟随发起 tab 的容器，防切 tab 串写
 			if (t.role === 'user') {
 			// jsonl 记录的是完整 prompt（含注入全文/快照/图片 base64），回显前清洗为提问本身
-			const userBlock = this.renderUserMessage(this.cleanPromptForDisplay(t.blocks.map((b) => b.content).join('\n\n')), []);
-		this.addTurnAnchor(userBlock);
+		const userBlock = this.renderUserMessage(this.cleanPromptForDisplay(t.blocks.map((b) => b.content).join('\n\n')), [], mc);
+		 this.addTurnAnchor(userBlock);
 			} else if (t.role === 'assistant') {
-			const aiBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
+			const aiBlock = mc.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
 			const thinks = t.blocks.filter((b) => b.kind === 'thinking');
 				if (thinks.length) {
 				const d = aiBlock.createEl('details', { cls: 'codem-chat-thinking is-done' });
@@ -2943,7 +2960,7 @@ export class CodeMChatView extends ItemView {
 			if (b.kind === 'tool_use') {
 				const label = b.label ?? '工具';
 				const cat = toolCategory(label);
-				const details = this.msgContainer.createEl('details', { cls: `codem-chat-tool is-${cat}` });
+				const details = mc.createEl('details', { cls: `codem-chat-tool is-${cat}` });
 				const summary = details.createEl('summary');
 				summary.createSpan({ cls: 'codem-chat-tool-name', text: label });
 				const statusEl = summary.createSpan({ cls: 'codem-chat-tool-status' });
@@ -2958,7 +2975,7 @@ export class CodeMChatView extends ItemView {
 					);
 				}
 			} else {
-				const d = this.msgContainer.createEl('details', { cls: 'codem-chat-toolitem-standalone' });
+				const d = mc.createEl('details', { cls: 'codem-chat-toolitem-standalone' });
 				d.createEl('summary', { text: b.label ?? '工具结果' });
 				d.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
 			}
