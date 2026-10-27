@@ -481,11 +481,15 @@ export class CodeMChatView extends ItemView {
 		};
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
 		// 智能强度 chip（v1.0.5 对齐原生命名）：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
-		this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
+		this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v), 'gauge');
 		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
 		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
-		planBtn.createSpan({ cls: 'codem-chat-chip-inner', text: '📋 Plan' });
+		// v1.0.9 BUG-1：Plan chip 图标 emoji → SVG（与权限/智能强度 chip 一致，基线对齐）
+		const planInner = planBtn.createSpan({ cls: 'codem-chat-chip-inner' });
+		const planIcon = planInner.createSpan({ cls: 'codem-chat-chip-icon' });
+		setIcon(planIcon, 'list-checks');
+		planInner.createSpan({ cls: 'codem-chat-chip-label', text: 'Plan' });
 		planBtn.setAttribute('aria-label', 'Plan 模式：只读不写（新进程生效）');
 		planBtn.onclick = () => {
 			this.modelOpts.plan = !this.modelOpts.plan;
@@ -1144,10 +1148,16 @@ export class CodeMChatView extends ItemView {
 		kindCls: string,
 		values: string[],
 		get: () => string,
-		set: (v: string) => void
+		set: (v: string) => void,
+		icon?: string
 	): void {
 		const btn = host.createEl('button', { cls: 'codem-chat-chip ' + kindCls, attr: { type: 'button' } });
 		const inner = btn.createSpan({ cls: 'codem-chat-chip-inner' });
+		// v1.0.9 BUG-1：可选 SVG 图标——与权限 chip 同款 14px 图标，消除有无图标造成的基线高度差
+		if (icon) {
+			const iconEl = inner.createSpan({ cls: 'codem-chat-chip-icon' });
+			setIcon(iconEl, icon);
+		}
 		inner.createSpan({ cls: 'codem-chat-chip-label', text: label });
 		const valEl = inner.createSpan({ cls: 'codem-chat-chip-value', text: OPT_LABELS[''] ?? '跟随' });
 		inner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
@@ -1651,9 +1661,11 @@ export class CodeMChatView extends ItemView {
 			this.linkifyWikilinks(body);
 			this.decorateCodeBlocks(body);
 		}
-		// v1.0.5：消息 hover 操作按钮统一 lucide SVG 图标（copy/pencil/quote，与叶部/原生一致）
+		// v1.0.5：消息操作按钮统一 lucide SVG 图标（copy/pencil/quote，与叶部/原生一致）
+		// v1.0.9 BUG-2：操作按钮包进底部 ops 行——单独一行、左对齐、常驻显示
 		if (text) {
-			const copyBtn = row.createEl('button', { cls: 'codem-chat-copy-btn' });
+			const opsRow = row.createDiv({ cls: 'codem-chat-msg-ops' });
+			const copyBtn = opsRow.createEl('button', { cls: 'codem-chat-copy-btn' });
 			setIcon(copyBtn, 'copy');
 			copyBtn.setAttribute('aria-label', '复制此消息');
 			copyBtn.onclick = (e) => {
@@ -1663,7 +1675,7 @@ export class CodeMChatView extends ItemView {
 					window.setTimeout(() => setIcon(copyBtn, 'copy'), 1500);
 				});
 			};
-			const editBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-edit-btn' });
+			const editBtn = opsRow.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-edit-btn' });
 			setIcon(editBtn, 'pencil');
 			editBtn.setAttribute('aria-label', '编辑此消息（回填输入框）');
 			editBtn.onclick = (e) => {
@@ -1671,7 +1683,7 @@ export class CodeMChatView extends ItemView {
 				this.inputEl.value = text;
 				this.inputEl.focus();
 			};
-			const quoteBtn = row.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-quote-btn' });
+			const quoteBtn = opsRow.createEl('button', { cls: 'codem-chat-copy-btn codem-chat-quote-btn' });
 			setIcon(quoteBtn, 'quote');
 			quoteBtn.setAttribute('aria-label', '引用此消息');
 			quoteBtn.onclick = (e) => {
@@ -2682,6 +2694,9 @@ export class CodeMChatView extends ItemView {
 			this.plugin.settings.showArchivedSessions = !this.plugin.settings.showArchivedSessions;
 			this.filterHistory();
 		};
+		// v1.0.9 BUG-3：mousedown 吞掉焦点转移——点击工具条按钮否则会使输入框失焦，
+		// blur 处理器把历史浮层关掉（列表"退出"）；与 histBtn 同款处理，重建后每次都重新绑定
+		for (const b of [sortBtn, groupBtn, archBtn]) b.addEventListener('mousedown', (e) => e.preventDefault());
 		// 列表（分组 / 平铺）
 		const list = this.histEl.createDiv({ cls: 'codem-chat-hist-list' });
 		const archived = new Set(this.plugin.settings.archivedSessions ?? []);

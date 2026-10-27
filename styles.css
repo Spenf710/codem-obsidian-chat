@@ -4373,12 +4373,26 @@ button.codem-chat-hist-archbtn:hover {
 	padding: 2px 0;
 }
 
-/* v0.9.0 消息操作按钮定位（编辑✎在复制左边，引用❝再左边） */
-button.codem-chat-copy-btn.codem-chat-edit-btn {
-	right: 34px;
+/* v1.0.9 BUG-2：复制按钮改为输出底部单独一行、左对齐、常驻显示（替代 v0.9.0 的 hover 右上角浮层定位） */
+/* 用户消息操作行：copy/pencil/quote 三个按钮包在 .codem-chat-msg-ops 里随文档流常驻显示 */
+.codem-chat-root .codem-chat-msg-ops {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 6px;
 }
-button.codem-chat-copy-btn.codem-chat-quote-btn {
-	right: 68px;
+.codem-chat-root .codem-chat-msg-ops > .codem-chat-copy-btn {
+	position: static !important;
+	opacity: 1 !important;
+	visibility: visible !important;
+}
+/* assistant 段级复制按钮（实时+历史）：段文本底部单独一行（块级 flex 换行）、左对齐、常驻 */
+.codem-chat-root .codem-chat-text > .codem-chat-copy-btn {
+	position: static !important;
+	display: flex !important;
+	opacity: 1 !important;
+	visibility: visible !important;
+	margin: 8px 0 0 !important;
 }
 
 /* ===== v1.0.1 工具卡保底样式（强制生效，防止叶部 CSS 选择器未命中） ===== */
