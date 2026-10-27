@@ -4558,12 +4558,12 @@ button.codem-chat-hist-archbtn:hover {
 	position: relative;
 }
 
-/* v1.0.15：完整会话 ID 显示——超长省略号（可选中复制），title 悬停显全 */
-.codem-chat-root .codem-chat-sid {
-	flex: 0 1 auto;
-	min-width: 0;
-	max-width: 20em;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+/* v1.0.16：会话 ID 复制按钮（信息行内紧凑图标，点击复制完整 ID 排错定位） */
+.codem-chat-root .codem-chat-sid-btn {
+	flex: 0 0 auto;
+	padding: 1px 3px;
+}
+.codem-chat-root .codem-chat-sid-btn svg {
+	width: 13px;
+	height: 13px;
 }

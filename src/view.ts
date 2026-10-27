@@ -442,7 +442,14 @@ export class CodeMChatView extends ItemView {
 		const infoRow = root.createDiv({ cls: 'codem-chat-info-row' });
 		this.lightEl = infoRow.createSpan({ cls: 'codem-chat-light is-idle' });
 		infoRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
-		this.sidEl = infoRow.createSpan({ cls: 'codem-chat-sid' });
+		this.sidEl = infoRow.createEl('button', { cls: 'codem-chat-iconbtn codem-chat-sid-btn', attr: { type: 'button', 'aria-label': '复制完整会话 ID', title: '复制完整会话 ID' } });
+		setIcon(this.sidEl, 'clipboard-copy');
+		// v1.0.16：ID 复制按钮——点击复制完整 session_id（排错定位 jsonl），有会话才显示
+		this.sidEl.onclick = () => {
+			const sid = this.activeTab.sessionId;
+			if (!sid) return;
+			void navigator.clipboard.writeText(sid).then(() => new Notice(`已复制会话 ID：${sid}`, 2500));
+		};
 		this.infoTitleEl = infoRow.createSpan({ cls: 'codem-chat-info-title is-empty' });
 
 		// 输入容器（圆角边框内：图片预览行 + textarea + 底部状态行）
@@ -1237,9 +1244,8 @@ export class CodeMChatView extends ItemView {
 	private updateSidEl(): void {
 		if (!this.sidEl) return;
 		const sid = this.activeTab.sessionId;
-		// v1.0.15：完整会话 ID（排错时可直接选中复制去 grep/定位 jsonl）；超长 CSS 省略，title 悬停显全
-		this.sidEl.setText(sid ? '· ' + sid : '');
-		this.sidEl.setAttribute('title', sid ?? '');
+		// v1.0.16：ID 复制按钮——有会话才显示（无会话隐藏，图标按钮不再占信息行文本宽度）
+		this.sidEl.toggleClass('codem-is-hidden', !sid);
 		if (this.infoTitleEl) {
 			const title = sid ? (this.plugin.settings.sessionTitles[sid] ?? '') : '';
 			this.infoTitleEl.setText(title);
