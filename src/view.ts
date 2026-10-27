@@ -144,6 +144,17 @@ interface ChatTab {
 	turnSeq: number;
 }
 
+/** v1.0.2 chip 菜单值中文映射：CLI 参数用英文原值，UI 显示用中文 */
+const OPT_LABELS: Record<string, string> = {
+	'': '跟随',
+	'low': '低',
+	'medium': '中',
+	'high': '高',
+	'xhigh': '超高',
+	'minimal': '极简',
+	'max': '最大',
+};
+
 /** 内联候选条目（/ 技能 与 @ 文件/文件夹共用） */
 interface SuggestItem {
 	label: string;
@@ -358,14 +369,56 @@ export class CodeMChatView extends ItemView {
 			if (img instanceof HTMLImageElement && img.src.startsWith('data:')) this.openImageModal(img.src);
 		});
 
-		// tab 行在输入框外面（上方）：左 tab 组，右 +/历史图标（参考 Claudian UI）
-		const tabRow = root.createDiv({ cls: 'codem-chat-tabrow' });
-		this.tabsEl = tabRow.createDiv({ cls: 'codem-chat-tabs' });
-		const tabActions = tabRow.createDiv({ cls: 'codem-chat-actions' });
-		const newBtn = tabActions.createEl('button', { cls: 'codem-chat-iconbtn' });
-		newBtn.setAttribute('aria-label', '新会话');
-		setIcon(newBtn, 'plus');
-		newBtn.onclick = () => void this.startNewSession();
+	// tab 行在输入框外面（上方）：左 tab 组，右功能图标组
+	// v1.0.2 P1：补齐功能按钮（搜索/导出/保存为笔记/设置）
+	let reasonEl: HTMLElement | null = null; // 推理 chip 引用（v1.0.2 P2）
+	const tabRow = root.createDiv({ cls: 'codem-chat-tabrow' });
+	this.tabsEl = tabRow.createDiv({ cls: 'codem-chat-tabs' });
+	const tabActions = tabRow.createDiv({ cls: 'codem-chat-actions' });
+	// 导出会话：把当前会话序列化为 Markdown 写入剪贴板
+	const exportBtn = tabActions.createEl('button', { cls: 'codem-chat-iconbtn' });
+	exportBtn.setAttribute('aria-label', '导出会话为 Markdown');
+	setIcon(exportBtn, 'download');
+	exportBtn.onclick = () => {
+		const tab = this.activeTab;
+		let md = `# CodeM 会话导出\n\n> 时间：${new Date().toLocaleString()}\n\n`;
+		for (let j = 0; j < tab.scrollEl.children.length; j++) {
+			const el = tab.scrollEl.children[j] as HTMLElement;
+			const isUser = el.classList.contains('codem-chat-user');
+			const text = el.textContent ?? '';
+			md += isUser ? `## 👤 用户\n\n${text}\n\n` : `## ✳ CodeM\n\n${text}\n\n`;
+		}
+		void navigator.clipboard.writeText(md).then(() => new Notice('会话已导出到剪贴板', 3000));
+	};
+	// 保存为笔记：把当前会话写入 Vault 笔记文件
+	const saveBtn = tabActions.createEl('button', { cls: 'codem-chat-iconbtn' });
+	saveBtn.setAttribute('aria-label', '保存会话为笔记');
+	setIcon(saveBtn, 'file-text');
+	saveBtn.onclick = async () => {
+		try {
+			const folder = 'CodeM会话';
+			const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+			const path = `${folder}/CodeM会话 ${ts}.md`;
+			const tab = this.activeTab;
+			let md = `---\nsource: codem-chat\nsession: ${tab.sessionId ?? 'unknown'}\ndate: ${new Date().toISOString()}\ntags:\n  - codem-chat\n  - ai-session\n---\n\n# CodeM 会话记录\n\n> ${new Date().toLocaleString()}\n\n`;
+			for (let j = 0; j < tab.scrollEl.children.length; j++) {
+				const el = tab.scrollEl.children[j] as HTMLElement;
+				const isUser = el.classList.contains('codem-chat-user');
+				const text = el.textContent ?? '';
+				md += isUser ? `## 👤 用户\n\n${text}\n\n` : `## ✳ CodeM\n\n${text}\n\n`;
+			}
+			await this.app.vault.createFolder(folder).catch(() => {}); // 已存在则忽略
+			await this.app.vault.create(path, md);
+			new Notice(`已保存到 ${path}`, 5000);
+		} catch (e) {
+			new Notice(`保存失败：${e instanceof Error ? e.message : String(e)}`, 5000);
+		}
+	};
+	// 新会话
+	const newBtn = tabActions.createEl('button', { cls: 'codem-chat-iconbtn' });
+	newBtn.setAttribute('aria-label', '新会话');
+	setIcon(newBtn, 'plus');
+	newBtn.onclick = () => void this.startNewSession();
 		const histBtn = tabActions.createEl('button', { cls: 'codem-chat-iconbtn' });
 		histBtn.setAttribute('aria-label', '历史会话');
 		setIcon(histBtn, 'history');
@@ -426,8 +479,14 @@ export class CodeMChatView extends ItemView {
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
 		// 智能 chip：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
 		this.buildOptChip(chips, '智能', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v));
-		// 推理 chip：label 语义橙（叶部 --codem-tool-bash）；CLI --reasoning-effort，跟随配置=不传
+		// 推理 chip（v1.0.2 P2）：标注「自定义模型专用」——预置模型用智能档，推理档无效
 		this.buildOptChip(chips, '推理', 'codem-chat-reasoning', ['minimal', 'low', 'medium', 'high', 'max'], () => this.modelOpts.reasoning, (v) => (this.modelOpts.reasoning = v));
+		const reasonChip = chips.querySelector('.codem-chat-reasoning') as HTMLElement | null;
+		if (reasonChip) {
+			reasonChip.setAttribute('title', '推理强度（仅对自定义模型生效；预置模型请用「智能」档）');
+			reasonChip.setAttribute('aria-label', '推理强度：自定义模型专用，预置模型请用智能档');
+			reasonEl = reasonChip; // 保存引用供后续透明度调整
+		}
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
 		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
 		planBtn.createSpan({ cls: 'codem-chat-chip-inner', text: '📋 Plan' });
@@ -1085,22 +1144,23 @@ export class CodeMChatView extends ItemView {
 		const btn = host.createEl('button', { cls: 'codem-chat-chip ' + kindCls, attr: { type: 'button' } });
 		const inner = btn.createSpan({ cls: 'codem-chat-chip-inner' });
 		inner.createSpan({ cls: 'codem-chat-chip-label', text: label });
-		const valEl = inner.createSpan({ cls: 'codem-chat-chip-value', text: '跟随' });
+		const valEl = inner.createSpan({ cls: 'codem-chat-chip-value', text: OPT_LABELS[''] ?? '跟随' });
 		inner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		btn.onclick = (e) => {
 			const menu = new Menu();
+			// v1.0.2：菜单显示中文（OPT_LABELS 映射），CLI 参数传英文原值
 			menu.addItem((mi) =>
-				mi.setTitle('跟随配置').setChecked(get() === '').onClick(() => {
+				mi.setTitle(OPT_LABELS[''] ?? '跟随配置').setChecked(get() === '').onClick(() => {
 					set('');
-					valEl.setText('跟随');
+					valEl.setText(OPT_LABELS[''] ?? '跟随');
 					this.applyModelOpts();
 				})
 			);
 			for (const v of values) {
 				menu.addItem((mi) =>
-					mi.setTitle(v).setChecked(get() === v).onClick(() => {
+					mi.setTitle(OPT_LABELS[v] ?? v).setChecked(get() === v).onClick(() => {
 						set(v);
-						valEl.setText(v);
+						valEl.setText(OPT_LABELS[v] ?? v);
 						this.applyModelOpts();
 					})
 				);
@@ -2792,54 +2852,62 @@ export class CodeMChatView extends ItemView {
 		return lines.join('\n');
 	}
 
-	private renderHistoryTurn(t: Turn): void {
-		if (t.role === 'user') {
+	/** v1.0.2 P0：历史会话渲染——DOM 对齐叶部 CSS（与实时对话 handleToolEvent 同构） */
+		private renderHistoryTurn(t: Turn): void {
+			if (t.role === 'user') {
 			// jsonl 记录的是完整 prompt（含注入全文/快照/图片 base64），回显前清洗为提问本身
 			const userBlock = this.renderUserMessage(this.cleanPromptForDisplay(t.blocks.map((b) => b.content).join('\n\n')), []);
-			this.addTurnAnchor(userBlock);
-		} else if (t.role === 'assistant') {
+		this.addTurnAnchor(userBlock);
+			} else if (t.role === 'assistant') {
 			const aiBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
 			const thinks = t.blocks.filter((b) => b.kind === 'thinking');
-			if (thinks.length) {
+				if (thinks.length) {
 				const d = aiBlock.createEl('details', { cls: 'codem-chat-thinking is-done' });
 				d.createEl('summary', { text: '思考过程' });
-				d.createDiv({ cls: 'codem-chat-thinking-body' }).setText(thinks.map((b) => b.content).join('\n\n'));
+			d.createDiv({ cls: 'codem-chat-thinking-body' }).setText(thinks.map((b) => b.content).join('\n\n'));
 			}
-			for (const b of t.blocks) {
-				if (b.kind === 'text') {
+				for (const b of t.blocks) {
+					if (b.kind === 'text') {
 					const segEl = aiBlock.createDiv({ cls: 'codem-chat-text markdown-rendered' });
 					// 超长段折叠（长会话载入一次性全渲染同样会卡）
-					if (b.content.length > SEG_COLLAPSE_LIMIT) {
+						if (b.content.length > SEG_COLLAPSE_LIMIT) {
 						const det = segEl.createEl('details', { cls: 'codem-chat-seg-fold' });
 						det.createEl('summary', { text: `📄 长内容（约 ${b.content.length} 字）已折叠，点击展开` });
-						det.appendChild(renderMarkdown(b.content));
-					} else {
-						segEl.appendChild(renderMarkdown(b.content));
+					det.appendChild(renderMarkdown(b.content));
+						} else {
+					segEl.appendChild(renderMarkdown(b.content));
 					}
-					this.decorateCodeBlocks(segEl);
-				}
+				this.decorateCodeBlocks(segEl);
 			}
-			const tools = t.blocks.filter((b) => b.kind === 'tool_use');
-			if (tools.length) {
-				const d = aiBlock.createEl('details', { cls: 'codem-chat-tools' });
-				d.createEl('summary', { text: `🔧 工具调用 ${tools.length} 项` });
-				for (const b of tools) {
-					const label = b.label ?? '工具';
-					const item = d.createDiv({ cls: 'codem-chat-tool-item' });
-					const h = item.createDiv({ cls: 'codem-chat-tool-head' });
-				const ic = h.createSpan({ cls: 'codem-chat-tool-icon' });
-				 setIcon(ic, toolIcon(label));
-				 h.createSpan({ cls: 'codem-chat-tool-name', text: label });
-				 item.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
-				}
 			}
-		} else {
-			const d = this.msgContainer.createEl('details', { cls: 'codem-chat-toolitem-standalone' });
-			for (const b of t.blocks) {
-				d.createEl('summary', { text: b.label ?? (b.kind === 'tool_result' ? '工具结果' : '工具') });
-				d.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
+			// v1.0.2：工具卡 DOM 对齐叶部——每张工具卡独立 details.is-*，同实时对话
+				for (const b of t.blocks) {
+				if (b.kind !== 'tool_use') continue;
+				const label = b.label ?? '工具';
+					const cat = toolCategory(label);
+					const details = aiBlock.createEl('details', { cls: `codem-chat-tool is-${cat}` });
+					const summary = details.createEl('summary');
+				summary.createSpan({ cls: 'codem-chat-tool-name', text: label });
+				 const statusEl = summary.createSpan({ cls: 'codem-chat-tool-status' });
+				 statusEl.setAttribute('data-status', 'completed');
+				 statusEl.setText('✓');
+				const content = details.createDiv({ cls: 'codem-chat-tool-content' });
+			if (b.content) {
+		content.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(
+			b.content.length > TOOL_RESULT_MAX_LEN
+			? b.content.slice(0, TOOL_RESULT_MAX_LEN) + `…（截断，共 ${b.content.length} 字符）`
+				: b.content
+				);
 			}
 		}
+	} else {
+	  // v1.0.2：独立工具结果条目也用叶部结构
+	  const d = this.msgContainer.createEl('details', { cls: 'codem-chat-toolitem-standalone' });
+	  for (const b of t.blocks) {
+	   d.createEl('summary', { text: b.label ?? (b.kind === 'tool_result' ? '工具结果' : '工具') });
+	   d.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
+	  }
+	 }
 	}
 
 	/** 节流滚底：rAF 合并同帧多次调用；用户上翻（距底 >160px）时不抢滚动，保留阅读位置。
