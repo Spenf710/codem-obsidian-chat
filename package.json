@@ -1,6 +1,6 @@
 {
   "name": "codem-chat",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "CodeM sidebar chat plugin for Obsidian",
   "main": "main.js",
   "scripts": {

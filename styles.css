@@ -4557,3 +4557,13 @@ button.codem-chat-hist-archbtn:hover {
 .codem-chat-root .codem-chat-text {
 	position: relative;
 }
+
+/* v1.0.15：完整会话 ID 显示——超长省略号（可选中复制），title 悬停显全 */
+.codem-chat-root .codem-chat-sid {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 20em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

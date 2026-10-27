@@ -1237,7 +1237,9 @@ export class CodeMChatView extends ItemView {
 	private updateSidEl(): void {
 		if (!this.sidEl) return;
 		const sid = this.activeTab.sessionId;
-		this.sidEl.setText(sid ? '· ' + sid.slice(0, 8) : '');
+		// v1.0.15：完整会话 ID（排错时可直接选中复制去 grep/定位 jsonl）；超长 CSS 省略，title 悬停显全
+		this.sidEl.setText(sid ? '· ' + sid : '');
+		this.sidEl.setAttribute('title', sid ?? '');
 		if (this.infoTitleEl) {
 			const title = sid ? (this.plugin.settings.sessionTitles[sid] ?? '') : '';
 			this.infoTitleEl.setText(title);
