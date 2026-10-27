@@ -318,10 +318,10 @@ export interface SkillInfo {
 	description: string;
 }
 
-/** 扫描 CodeM/Claude 技能目录：~/.claude/skills、~/.codem/skills、managed 下各层 skills 子目录 */
+/** 扫描 CodeM 技能目录：~/.agents/skills、~/.codem/skills、managed 下各层 skills 子目录（与 CodeM 运行时加载源一致，不扫 ~/.claude） */
 export async function listCodemSkills(): Promise<SkillInfo[]> {
 	const home = os.homedir();
-	const roots = [path.join(home, '.claude', 'skills'), path.join(home, '.codem', 'skills')];
+	const roots = [path.join(home, '.agents', 'skills'), path.join(home, '.codem', 'skills')];
 	const managed = path.join(home, '.codem', 'managed');
 	try {
 		for (const p of await fs.promises.readdir(managed)) {
@@ -359,20 +359,41 @@ export async function listCodemSkills(): Promise<SkillInfo[]> {
 			} catch {
 				continue;
 			}
-			if (map.has(d)) continue;
+			// 菜单名与去重键统一用 frontmatter 的 name（与 CodeM 运行时注册名一致），缺省回退目录名
+			let name = d;
 			let description = '';
 			try {
-				const head = (await fs.promises.readFile(skillMd, 'utf8')).slice(0, 800);
-				const m = head.match(/^---\s*\n([\s\S]*?)\n---/);
-				if (m) {
-					description = (m[1].match(/^description:\s*(.+)$/m)?.[1] ?? '')
-						.replace(/^["']|["']$/g, '')
-						.slice(0, 100);
+				const head = (await fs.promises.readFile(skillMd, 'utf8')).slice(0, 4000);
+				const fm = head.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+				if (fm) {
+					const lines = fm[1].split(/\r?\n/);
+					const nameLine = lines.find((l) => /^name:\s*/.test(l));
+					if (nameLine) {
+						const v = nameLine.replace(/^name:\s*/, '').replace(/^["']|["']$/g, '').trim();
+						if (v) name = v;
+					}
+					const idx = lines.findIndex((l) => /^description:\s*/.test(l));
+					if (idx >= 0) {
+						const inline = lines[idx].replace(/^description:\s*/, '').trim();
+						if (inline && !/^[|>]/.test(inline)) {
+							description = inline.replace(/^["']|["']$/g, '');
+						} else {
+							// 块标量（| 或 > 开头）：收集后续缩进行，直到下一个顶层键
+							const parts: string[] = [];
+							for (let j = idx + 1; j < lines.length; j++) {
+								if (/^\S/.test(lines[j])) break;
+								parts.push(lines[j].trim());
+							}
+							description = parts.join(' ');
+						}
+					}
 				}
 			} catch {
 				// 读取失败只留名字
 			}
-			map.set(d, { name: d, description });
+			description = description.slice(0, 100);
+			if (map.has(name)) continue;
+			map.set(name, { name, description });
 		}
 	}
 	return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
