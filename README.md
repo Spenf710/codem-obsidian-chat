@@ -13,9 +13,16 @@ Embed CodeM (Feishu AI coding agent) into Obsidian as a sidebar chat. Your vault
 - **`/` skills**: lists CodeM and local skills, searchable by Chinese description
 - **`@` references**: fuzzy search or drill-down browse; `[[note]]` and `[[folder]]` contents are injected into context
 - **Image paste**: paste screenshots from the clipboard (base64 inline, decoded by CodeM)
-- **Permission modes**: 🔒 manual / ✨ smart (auto-approve read-only tools) / 🤖 YOLO — one-click switch at the composer
+- **Permission levels**: Request approval / Approve for me (auto-approve read-only tools) / Full access — one-click switch at the composer, with icons matching the CodeM client
 - **Input history & drop**: recall the last 50 prompts with ↑/↓ in an empty input, Ctrl/Cmd+Enter to send, drag-and-drop images
 - **Turn navigation**: floating buttons jump between user turns in long conversations
+- **Reliability**: permission watchdog (auto-decline after 5 min), RPC timeouts, per-tab error status light
+- **Prompt queue**: queue messages while the agent is busy — per-tab ownership, reorder, edit, Steer (stop current turn and send next)
+- **Session management**: archive / sort / time-group history, tab state persistence across Obsidian restarts, session source labels (Feishu / terminal / client)
+- **Message actions**: copy / edit-resend / quote / regenerate / retry on hover
+- **In-session search**: Ctrl+Shift+F with match highlighting and count navigation
+- **Checkpoint rollback**: revert file changes recorded in CodeM snapshots (terminal / Feishu sessions; ACP sessions don't record snapshots)
+- **Smart composer**: permission levels, intelligence level and Plan mode wired to CodeM CLI flags
 
 ## Prerequisites
 
@@ -50,54 +57,6 @@ npm run dev     # build with inline sourcemaps
 npm run build   # production build
 ```
 
-## 📋 待办
-
-> 2026-10-26 整理：对标叶版 v1.19.2（同源平行演化路线）已验证能力 + 用户 UI 反馈。优先级从上到下。
-
-### v0.4.0 可靠性三件套（P0，低成本高收益）✅ 已全部完成（2026-10-26）
-
-- [x] **审批看门狗**：5 分钟超时自动拒绝并 UI 留痕；停止/轮末回收挂起审批回 decline——修掉审批条永久挂死（10-26 崩溃会话真实踩过）
-- [x] **error 状态灯**：失败/强制收尾不复用 done（红=失败）；完整六态状态机留待后续
-- [x] **ACP 传输层超时**：request() 加默认 300s 超时（session/prompt 除外，由 watchdog 兜底）
-
-### 多会话工作流（P1，适配"常新开会话、单会话 ≤100 轮"的使用模式）
-
-- [ ] **会话持久化**：getState/setState，重启 Obsidian 不丢 tab（10-26 崩溃恢复时全靠手动历史载入）
-- [ ] **会话归档/排序/时间分组**：今天/昨天/本周/更早分组 + 归档收纳 + 四种排序
-- [ ] **队列面板化**：inputQueue 已有数据结构，补 UI——输入框上方全量列表 + 逐条编辑/删除 + 上限 8 条
-- [ ] **命令前缀授权记忆**：按"前两个词"记（如 npm install），比按工具名记忆细一档
-
-### 输入框 UI 对标叶版（P1.5）✅ 已完成（v0.5.0~v0.5.3 + v0.6.0 源码级复刻，2026-10-26）
-
-- [x] **输入历史 ↑↓**：输入框空白时调取最近 50 条 prompt（本次会话内有效）
-- [x] **Cmd/Ctrl+Enter 发送**：Enter 仍发送、Shift+Enter 换行
-- [x] **图片拖拽上传**：拖入输入区即预览（原来仅粘贴）
-- [x] **权限模式 chip**：下拉菜单三选一 🔒手动 / ✨智能（只读自动）/ 🤖YOLO；设置项改为初始档位
-- [x] **智能/推理/Plan 接 CLI（v0.5.1）**：`--intelligence`（low/medium/high/xhigh）、`--reasoning-effort`（上游原生值域）、`--plan` 只读模式；切换自动重启 ACP 进程并恢复各 tab 会话
-- [x] **chip 视觉源码级复刻（v0.6.0，学习叶部 styles.css）**：三段式结构（label 淡灰/语义色 + value 半粗 + chevron 淡显）+ 24px 统一高度 + hover 只提亮文字；智能标签品牌紫蓝（#6366f1）、推理标签 bash 橙（#f59e0b）；Plan 开启渐变高亮；工具栏/信息行分离（叶部 v1.8.0 Composer 重排：输入框内底部只放可操作 chip，灯/agent/会话短码移到输入框下方 info-row）；停止按钮常驻禁用态；拖拽反馈 dashed+inset 阴影；容器查询窄容器降级（300px 隐 Plan → 230px 隐标签）
-
-### 输出界面对标叶版（P1.5）✅ 除消息操作行外已完成（v0.5.0）
-
-- [x] **工具卡分类配色**：bash/edit/search/web 图标分色 + 写操作「⚠ 可写」徽章
-- [x] **代码块语言标签 + 复制按钮**（hover 显现）
-- [x] **diff 双列视图**：左删除侧/右新增侧，ctx 双列同显
-- [ ] **消息 hover 操作行**：复制/编辑重发/重新生成（留待下轮，涉及轮次截断逻辑）
-- [x] **运行读数**：轮次头部实时计时，180s 无响应转「⚠ 长时间无响应」
-- [x] **审批等待横幅**：消息区顶部常驻「⏸ 等待你批准」，应答/超时后移除（后台 Tab 另有 Notice）
-- [x] **工具失败归类**：exit 127/126/124 人话化置顶提示
-
-### 工程方法（随版本持续）
-
-- [ ] **12 条回归自检清单**：每个 request 有无超时 / 停止是否回收挂起 / 失败路径灯是否不同等，每次改动后过一遍
-- [ ] **断言式回归测试**：TS 源码写测试比叶版（minified 产物 60+77 断言）容易，优先覆盖队列与权限路径
-
-### 远期（P3，先探针再动工）
-
-- [ ] **checkpoint 回滚**：需探针 CLI checkpoints/rewind 能力（文件真还原 + 对话真回退 + 回滚并重问）
-- [ ] **权限三档接 CLI 服务端参数**：需探针 --permission-mode 在当前 CLI 版本行为
-- [ ] **i18n / 无障碍**：locale 表 + aria 全覆盖（参照叶版 469 键三语方案）
-- [ ] **消息虚拟化**：单会话几百轮再考虑（直接借鉴叶版 claudian-virtualizer 方案与踩坑记录）
-
 ## License
 
 [MIT](LICENSE)
@@ -105,4 +64,4 @@ npm run build   # production build
 ## 致谢
 
 - 布局与交互设计参考 Claudian（Obsidian AI 对话插件）的设计思路：侧边栏对话视图、多会话 Tab、流式渲染。
-- **叶葳（叶部）**：v0.5.0 的 UI 对标主要参考其 CodeM Chat v1.19.2 分享包——输入框交互（输入历史 / Ctrl+Enter / 拖拽图片 / 权限模式三档）与输出界面（工具卡分类配色 / 代码块装饰 / 双列 diff / 运行读数 / 审批横幅 / 失败归类）的设计与实测结论，已列入合作作者。
+- **Ye Wei**: co-author. UI and interaction design informed by his CodeM Chat fork — input history, Ctrl+Enter, drag-and-drop images, permission levels; tool card coloring, code block decoration, two-column diff, live readout, approval banner, and failure classification.

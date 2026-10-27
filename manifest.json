@@ -4,6 +4,6 @@
   "version": "1.1.1",
   "minAppVersion": "1.7.2",
   "description": "Embeds CodeM (Feishu AI coding agent) as a sidebar chat in your vault. Your vault becomes its working directory.",
-  "author": "Pengfei Sun & Ye Wei (叶葳)",
+  "author": "Pengfei Sun & Ye Wei",
   "isDesktopOnly": true
 }
