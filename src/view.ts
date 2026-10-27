@@ -1649,11 +1649,10 @@ export class CodeMChatView extends ItemView {
 		// 行容器：气泡 + 气泡外侧的时间戳（时间戳不放进深色气泡内，避免看不清）
 		// v1.0.8 P0-1：into 指定落点容器（历史载入防切 tab 串台），默认当前 tab
 		const row = (into ?? this.msgContainer).createDiv({ cls: 'codem-chat-msg codem-chat-user-row' });
-		// 消息时间戳（HH:MM）：气泡上方、左对齐——DOM 排在气泡前（column 布局在上），行容器内左对齐
+		// 消息时间戳（HH:MM）：v1.0.10 移到底部操作行右对齐（常驻）
 		const now = new Date();
 		const hh = String(now.getHours()).padStart(2, '0');
 		const mm = String(now.getMinutes()).padStart(2, '0');
-		row.createSpan({ cls: 'codem-chat-time', text: `${hh}:${mm}` });
 		const userBlock = row.createDiv({ cls: 'codem-chat-user' });
 		if (text) {
 			const body = userBlock.createDiv({ cls: 'codem-chat-body markdown-rendered' });
@@ -1662,9 +1661,9 @@ export class CodeMChatView extends ItemView {
 			this.decorateCodeBlocks(body);
 		}
 		// v1.0.5：消息操作按钮统一 lucide SVG 图标（copy/pencil/quote，与叶部/原生一致）
-		// v1.0.9 BUG-2：操作按钮包进底部 ops 行——单独一行、左对齐、常驻显示
+		// v1.0.10：操作行常驻 DOM（时间在其中），按钮组 hover 淡入/淡出（CSS 控制），时间右对齐常驻
+		const opsRow = row.createDiv({ cls: 'codem-chat-msg-ops' });
 		if (text) {
-			const opsRow = row.createDiv({ cls: 'codem-chat-msg-ops' });
 			const copyBtn = opsRow.createEl('button', { cls: 'codem-chat-copy-btn' });
 			setIcon(copyBtn, 'copy');
 			copyBtn.setAttribute('aria-label', '复制此消息');
@@ -1692,6 +1691,8 @@ export class CodeMChatView extends ItemView {
 				this.inputEl.focus();
 			};
 		}
+		// v1.0.10：时间戳放操作行右端（常驻显示，按钮组 hover 淡入/淡出）
+		opsRow.createSpan({ cls: 'codem-chat-time', text: `${hh}:${mm}` });
 		for (const img of images) {
 			userBlock.createEl('img', { cls: 'codem-chat-img', attr: { src: `data:${img.mime};base64,${img.data}` } });
 		}
@@ -2633,6 +2634,8 @@ export class CodeMChatView extends ItemView {
 		const showArchived = this.plugin.settings.showArchivedSessions ?? false;
 		let items = this.allCards.filter((c) => {
 			if (!showArchived && archived.has(c.sessionId)) return false;
+			// v1.0.10：标题生成无头调用的会话不进列表（探针实测 codem -p 当前不落盘，防御存量/未来行为）
+			if (c.firstPrompt.startsWith('[标题生成]')) return false;
 			if (q && !this.sessionTitle(c).toLowerCase().includes(q)) return false;
 			return true;
 		});
