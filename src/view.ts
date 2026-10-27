@@ -2901,13 +2901,33 @@ export class CodeMChatView extends ItemView {
 			}
 		}
 	} else {
-	  // v1.0.2：独立工具结果条目也用叶部结构
-	  const d = this.msgContainer.createEl('details', { cls: 'codem-chat-toolitem-standalone' });
-	  for (const b of t.blocks) {
-	   d.createEl('summary', { text: b.label ?? (b.kind === 'tool_result' ? '工具结果' : '工具') });
-	   d.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
-	  }
-	 }
+		// v1.0.2 修复：独立工具条目分两种——tool_call 产生的 tool_use 用叶部 is-{cat} 卡片（与实时对话一致），
+		// tool_result 产生的结果块用 fold；此前统一走 toolitem-standalone 导致 run_bash 裸奔
+		for (const b of t.blocks) {
+			if (b.kind === 'tool_use') {
+				const label = b.label ?? '工具';
+				const cat = toolCategory(label);
+				const details = this.msgContainer.createEl('details', { cls: `codem-chat-tool is-${cat}` });
+				const summary = details.createEl('summary');
+				summary.createSpan({ cls: 'codem-chat-tool-name', text: label });
+				const statusEl = summary.createSpan({ cls: 'codem-chat-tool-status' });
+				statusEl.setAttribute('data-status', 'completed');
+				statusEl.setText('✓');
+				const content = details.createDiv({ cls: 'codem-chat-tool-content' });
+				if (b.content) {
+					content.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(
+						b.content.length > TOOL_RESULT_MAX_LEN
+							? b.content.slice(0, TOOL_RESULT_MAX_LEN) + `…（截断，共 ${b.content.length} 字符）`
+							: b.content
+					);
+				}
+			} else {
+				const d = this.msgContainer.createEl('details', { cls: 'codem-chat-toolitem-standalone' });
+				d.createEl('summary', { text: b.label ?? '工具结果' });
+				d.createEl('pre', { cls: 'codem-chat-tool-result' }).setText(b.content);
+			}
+		}
+	}
 	}
 
 	/** 节流滚底：rAF 合并同帧多次调用；用户上翻（距底 >160px）时不抢滚动，保留阅读位置。
