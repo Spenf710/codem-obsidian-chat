@@ -4567,3 +4567,16 @@ button.codem-chat-hist-archbtn:hover {
 	width: 13px;
 	height: 13px;
 }
+
+/* v1.1.0 会话内搜索：隐藏态保险（叶部 codem-is-hidden 之外自保一层） */
+.codem-chat-root .codem-chat-searchbar.codem-is-hidden {
+	display: none !important;
+}
+
+/* v1.1.0 checkpoint 回滚确认弹窗按钮行 */
+.codem-chat-ckpt-confirm-row {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 12px;
+}

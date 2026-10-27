@@ -1,9 +1,28 @@
-import { ItemView, Menu, Notice, WorkspaceLeaf, setIcon, TFile, TFolder } from 'obsidian';
+import { ItemView, Menu, Modal, Notice, WorkspaceLeaf, setIcon, TFile, TFolder } from 'obsidian';
 import * as fs from 'fs';
 import * as path from 'path';
 import type CodeMChatPlugin from './main';
 import { AcpClient, runCodemHeadless, expandPath, type AcpOptions } from './acp-client';
 import { renderMarkdown } from './markdown';
+
+// —— v1.1.0 P1-2：跨视图会话占用注册表（模块级，所有视图实例共享）——
+// 同一会话在同一视图内的双开由 loadHistory 的 holder 检查拦截；跨视图/窗口双开靠本表：
+// 防止两个 leaf 持同一 sessionId 导致 update/permission 路由串台、writer 占用冲突
+const sessionOwners = new Map<string, string>();
+
+// —— v1.1.0 checkpoint 回滚：jsonl 快照事件结构（探针实证字段）——
+interface CheckpointFile {
+	path: string;
+	snapshotKind: string; // baseline=改前内容快照 / created=本轮新建（回滚即删）
+	snapshotSha: string; // 内容寻址：blobs/<sha前2>/<后62>，sha256=文件内容
+}
+interface CheckpointInfo {
+	id: string;
+	label: string;
+	at: string;
+	turnIndex: number;
+	files: CheckpointFile[];
+}
 import {
 	listCodemSessions,
 	readCodemSessionTurns,
@@ -450,6 +469,10 @@ export class CodeMChatView extends ItemView {
 			if (!sid) return;
 			void navigator.clipboard.writeText(sid).then(() => new Notice(`已复制会话 ID：${sid}`, 2500));
 		};
+		// v1.1.0 checkpoint：快照回滚按钮（信息行，有会话才显示）
+		this.ckptBtnEl = infoRow.createEl('button', { cls: 'codem-chat-iconbtn codem-chat-sid-btn codem-chat-ckpt-btn', attr: { type: 'button', 'aria-label': '快照回滚', title: '快照回滚（checkpoint）' } });
+		setIcon(this.ckptBtnEl, 'history');
+		this.ckptBtnEl.onclick = (e) => void this.openCheckpointMenu(e);
 		this.infoTitleEl = infoRow.createSpan({ cls: 'codem-chat-info-title is-empty' });
 
 		// 输入容器（圆角边框内：图片预览行 + textarea + 底部状态行）
@@ -545,6 +568,17 @@ export class CodeMChatView extends ItemView {
 				if (suggestActive || histActive) return;
 				e.preventDefault();
 				this.stopActiveTurn();
+			},
+			true
+		);
+		// v1.1.0：Ctrl+Shift+F 打开会话内搜索（视图级捕获，对标叶部）
+		this.containerEl.addEventListener(
+			'keydown',
+			(e) => {
+				if (e.key.toLowerCase() === 'f' && e.ctrlKey && e.shiftKey && !e.isComposing) {
+					e.preventDefault();
+					this.openSearch();
+				}
 			},
 			true
 		);
@@ -910,6 +944,8 @@ export class CodeMChatView extends ItemView {
 		this.updateSidEl();
 		this.setStatusLight(tab.light);
 		this.inputEl.focus();
+		// v1.1.0：搜索开着时切换 tab 自动重搜（unwrap 全局清除后按新 tab 重跑）
+		if (this.searchWrap && !this.searchWrap.hasClass('codem-is-hidden')) this.runSearch();
 	}
 
 	/** 关闭 tab：释放其会话；关的是当前 tab 则切到相邻（无相邻则新建空 tab） */
@@ -1069,6 +1105,8 @@ export class CodeMChatView extends ItemView {
 		const t = tab ?? this.activeTab;
 		const sid = t.sessionId;
 		t.sessionId = null;
+		// v1.1.0 P1-2：释放本视图在跨视图占用表中的登记（只删自己登记的，不动其它视图）
+		if (sid && sessionOwners.get(sid) === this.viewId) sessionOwners.delete(sid);
 		if (sid && this.client) {
 			this.client.closeSession(sid).catch(() => {
 				// 已被占用/未知会话等场景忽略
@@ -1241,11 +1279,288 @@ export class CodeMChatView extends ItemView {
 	}
 
 	/** 底部会话短码 + 会话标题（叶部 info-title：AI 标题/首问，ellipsis 溢出）：切 tab/新会话/载入历史/标题生成时同步 */
+	// —— v1.1.0 P1-2：本视图实例标识（跨视图占用登记用）——
+	private readonly viewId = 'v' + Math.random().toString(36).slice(2, 8);
+
+	// v1.1.0 checkpoint：信息行快照回滚按钮
+	private ckptBtnEl: HTMLElement | null = null;
+
+	// —— v1.1.0 会话内搜索（叶部对标：Ctrl+Shift+F 打开，Enter/Shift+Enter 跳转，Esc 关闭）——
+	private searchWrap: HTMLElement | null = null;
+	private searchInputEl: HTMLInputElement | null = null;
+	private searchCountEl: HTMLElement | null = null;
+	private searchHits: HTMLElement[] = [];
+	private searchIndex = 0;
+	private searchTimer: number | null = null;
+
+	/** 懒创建搜索条（插 msgArea 首位 sticky 吸顶，首次 Ctrl+Shift+F 时才建） */
+	private ensureSearchbar(): HTMLElement {
+		if (this.searchWrap) return this.searchWrap;
+		const bar = this.msgArea.createDiv({ cls: 'codem-chat-searchbar codem-is-hidden' });
+		const row = bar.createDiv({ cls: 'codem-chat-search-row' });
+		const icon = row.createSpan({ cls: 'codem-chat-search-icon' });
+		setIcon(icon, 'search');
+		const inp = row.createEl('input', { cls: 'codem-chat-search-input', attr: { type: 'text', placeholder: '搜索当前会话内容…' } });
+		const nav = row.createDiv({ cls: 'codem-chat-search-nav' });
+		const prev = nav.createEl('button', { attr: { type: 'button', 'aria-label': '上一个匹配' }, text: '↑' });
+		const next = nav.createEl('button', { attr: { type: 'button', 'aria-label': '下一个匹配' }, text: '↓' });
+		const closeBtn = nav.createEl('button', { attr: { type: 'button', 'aria-label': '关闭搜索' }, text: '✕' });
+		this.searchCountEl = row.createSpan({ cls: 'codem-chat-search-count', text: '' });
+		this.searchInputEl = inp;
+		this.searchWrap = bar;
+		prev.onclick = () => this.gotoSearchHit(-1);
+		next.onclick = () => this.gotoSearchHit(1);
+		closeBtn.onclick = () => this.closeSearch();
+		inp.addEventListener('input', () => {
+			if (this.searchTimer) window.clearTimeout(this.searchTimer);
+			this.searchTimer = window.setTimeout(() => {
+				this.searchTimer = null;
+				this.runSearch();
+			}, 250);
+		});
+		inp.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				this.gotoSearchHit(e.shiftKey ? -1 : 1);
+			} else if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				this.closeSearch();
+			}
+		});
+		return bar;
+	}
+
+	private openSearch(): void {
+		const bar = this.ensureSearchbar();
+		bar.removeClass('codem-is-hidden');
+		this.searchInputEl?.focus();
+		this.searchInputEl?.select();
+		if (this.searchInputEl?.value) this.runSearch();
+	}
+
+	private closeSearch(): void {
+		this.unwrapSearchHits();
+		this.searchWrap?.addClass('codem-is-hidden');
+		this.searchCountEl?.setText('');
+		this.inputEl?.focus();
+	}
+
+	/** 移除全部搜索高亮并 normalize 恢复文本节点连续（流式安全） */
+	private unwrapSearchHits(): void {
+		const root = this.containerEl;
+		if (!root) return;
+		for (const mark of Array.from(root.querySelectorAll('mark.codem-chat-search-hit'))) {
+			mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
+		}
+		root.querySelectorAll('.codem-chat-msg, .codem-chat-text').forEach((el) => el.normalize());
+		root.querySelectorAll('.codem-chat-msg.is-current-match').forEach((el) => el.classList.remove('is-current-match'));
+		this.searchHits = [];
+		this.searchIndex = 0;
+	}
+
+	/** 全量搜索当前 tab：textNode 逐段 mark 包裹（大小写不敏感；流式完成重建后高亮自然消失，重按 Enter 即重搜） */
+	private runSearch(): void {
+		this.unwrapSearchHits();
+		const tab = this.activeTab;
+		const q = (this.searchInputEl?.value ?? '').trim().toLowerCase();
+		if (!tab?.scrollEl || !q) {
+			this.searchCountEl?.setText(q ? '0/0' : '');
+			return;
+		}
+		const walker = document.createTreeWalker(tab.scrollEl, NodeFilter.SHOW_TEXT);
+		const targets: Text[] = [];
+		for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+			const t = n as Text;
+			if (t.nodeValue && t.nodeValue.toLowerCase().includes(q)) targets.push(t);
+		}
+		for (const t of targets) {
+			let cur: Text | null = t;
+			while (cur && cur.nodeValue) {
+				const at = cur.nodeValue.toLowerCase().indexOf(q);
+				if (at < 0) break;
+				const after = cur.splitText(at + q.length);
+				const mid = cur.splitText(at);
+				const mark = document.createElement('mark');
+				mark.className = 'codem-chat-search-hit';
+				mark.textContent = mid.nodeValue;
+				mid.replaceWith(mark);
+				this.searchHits.push(mark);
+				cur = after;
+			}
+		}
+		if (this.searchHits.length) this.gotoSearchHit(0);
+		else this.searchCountEl?.setText('0/0');
+	}
+
+	/** 跳转匹配（wrap-around）：更新计数/当前态/滚动定位到消息 */
+	private gotoSearchHit(delta: number): void {
+		const hits = this.searchHits;
+		if (!hits.length) {
+			this.searchCountEl?.setText('0/0');
+			return;
+		}
+		hits[this.searchIndex]?.classList.remove('is-current');
+		hits[this.searchIndex]?.closest('.codem-chat-msg')?.classList.remove('is-current-match');
+		this.searchIndex = (this.searchIndex + delta + hits.length) % hits.length;
+		const cur = hits[this.searchIndex];
+		cur.classList.add('is-current');
+		cur.closest('.codem-chat-msg')?.classList.add('is-current-match');
+		cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
+		this.searchCountEl?.setText(`${this.searchIndex + 1}/${hits.length}`);
+	}
+
+	// —— v1.1.0 checkpoint 回滚：快照菜单 → 确认弹窗 → 备份后恢复 ——
+	/** 打开快照菜单（按 turn 倒序列出；点击进确认弹窗） */
+	private async openCheckpointMenu(e: MouseEvent): Promise<void> {
+		const tab = this.activeTab;
+		const sid = tab.sessionId;
+		if (!sid) {
+			new Notice('当前无活动会话，无快照');
+			return;
+		}
+		if (tab.busy) {
+			new Notice('会话执行中，等本轮结束再回滚');
+			return;
+		}
+		const cards = await listCodemSessions();
+		const card = cards.find((c) => c.sessionId === sid);
+		if (!card) {
+			new Notice('未找到会话记录文件，无法读取快照');
+			return;
+		}
+		const cps = this.readCheckpoints(card.filePath);
+		if (!cps.length) {
+			new Notice('该会话没有快照记录');
+			return;
+		}
+		const menu = new Menu();
+		menu.addItem((m) => m.setTitle('选择回滚点（撤销自该回合起的文件改动，回滚前自动备份）').setDisabled(true));
+		menu.addSeparator();
+		for (let i = cps.length - 1; i >= 0; i--) {
+			const cp = cps[i];
+			const t = cp.at ? cp.at.replace('T', ' ').slice(5, 16) : '';
+			menu.addItem((m) => m.setTitle(`${cp.label}${t ? ' · ' + t : ''}`).onClick(() => this.confirmRestore(cp, card, cps)));
+		}
+		menu.showAtMouseEvent(e);
+	}
+
+	/** 解析 jsonl 里全部 checkpoint 事件（探针实证：type/label/created_at/turn_index/files[]） */
+	private readCheckpoints(filePath: string): CheckpointInfo[] {
+		try {
+			const text = fs.readFileSync(filePath, 'utf8');
+			const out: CheckpointInfo[] = [];
+			for (const line of text.split('\n')) {
+				if (!line.includes('"checkpoint"')) continue;
+				let obj: Record<string, unknown>;
+				try {
+					obj = JSON.parse(line) as Record<string, unknown>;
+				} catch {
+					continue;
+				}
+				if (obj.type !== 'checkpoint' || !Array.isArray(obj.files)) continue;
+				out.push({
+					id: String(obj.id ?? ''),
+					label: String(obj.label ?? `Turn ${obj.turn_index ?? '?'}`),
+					at: String(obj.created_at ?? obj.at ?? ''),
+					turnIndex: Number(obj.turn_index ?? 0),
+					files: (obj.files as Array<Record<string, unknown>>).map((f) => ({
+						path: String(f.path ?? ''),
+						snapshotKind: String(f.snapshotKind ?? ''),
+						snapshotSha: String(f.snapshotSha ?? ''),
+					})),
+				});
+			}
+			out.sort((a, b) => a.turnIndex - b.turnIndex || a.at.localeCompare(b.at));
+			return out;
+		} catch {
+			return [];
+		}
+	}
+
+	/** 回滚确认弹窗：列出将撤销的文件（回滚前自动备份到会话 scratchpad） */
+	private confirmRestore(cp: CheckpointInfo, card: SessionCard, cps: CheckpointInfo[]): void {
+		const startIdx = cps.findIndex((c) => c.id === cp.id);
+		const changed = new Set<string>();
+		for (let i = startIdx; i < cps.length; i++) for (const f of cps[i].files) changed.add(f.path);
+		const mod = new Modal(this.app);
+		mod.titleEl.setText(`回滚到「${cp.label}」`);
+		const list = Array.from(changed).filter((p) => !p.includes('scratchpad'));
+		mod.contentEl.createEl('p', { text: `将撤销自此快照之后的 ${changed.size} 个文件改动（当前内容先备份到会话 scratchpad/rollback-backup）：` });
+		const ul = mod.contentEl.createEl('ul');
+		for (const p of list.slice(0, 8)) ul.createEl('li', { text: p });
+		if (changed.size > 8) ul.createEl('li', { text: `… 其余 ${changed.size - 8} 个（含会话临时文件）` });
+		if (!list.length && changed.size) ul.createEl('li', { text: '（均为会话临时文件，无源文件改动）' });
+		const row = mod.contentEl.createDiv({ cls: 'codem-chat-ckpt-confirm-row' });
+		const cancel = row.createEl('button', { text: '取消' });
+		const ok = row.createEl('button', { text: '回滚', cls: 'mod-cta' });
+		cancel.onclick = () => mod.close();
+		ok.onclick = () => {
+			mod.close();
+			this.applyRestore(cp, card, cps);
+		};
+		mod.open();
+	}
+
+	/** 执行恢复：每个文件取目标快照起首次记录的基线（baseline=写回 blob / created=删除），先备份现内容 */
+	private applyRestore(cp: CheckpointInfo, card: SessionCard, cps: CheckpointInfo[]): void {
+		try {
+			const startIdx = cps.findIndex((c) => c.id === cp.id);
+			const plan = new Map<string, { op: 'restore' | 'delete'; sha?: string }>();
+			for (let i = startIdx; i < cps.length; i++) {
+				for (const f of cps[i].files) {
+					if (plan.has(f.path)) continue;
+					plan.set(f.path, f.snapshotKind === 'created' ? { op: 'delete' } : { op: 'restore', sha: f.snapshotSha });
+				}
+			}
+			if (!plan.size) {
+				new Notice('该快照无文件改动需要回滚');
+				return;
+			}
+			const sessionDir = path.join(path.dirname(card.filePath), path.basename(card.filePath, '.jsonl'));
+			const blobDir = path.join(sessionDir, 'checkpoints', 'blobs');
+			const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+			const backupDir = path.join(sessionDir, 'scratchpad', 'rollback-backup', stamp);
+			fs.mkdirSync(backupDir, { recursive: true });
+			let ok = 0;
+			let skip = 0;
+			const sanitize = (p: string): string => p.replace(/[\\/:*?"<>|]/g, '_');
+			for (const [fp, act] of plan) {
+				try {
+					// 回滚前备份当前内容（存在才备份；可从备份目录手工救回）
+					if (fs.existsSync(fp)) {
+						fs.copyFileSync(fp, path.join(backupDir, sanitize(fp)));
+					}
+					if (act.op === 'delete') {
+						if (fs.existsSync(fp)) fs.unlinkSync(fp);
+						ok++;
+					} else if (act.sha) {
+						const blob = path.join(blobDir, act.sha.slice(0, 2), act.sha.slice(2));
+						if (!fs.existsSync(blob)) {
+							skip++;
+							continue;
+						}
+						fs.copyFileSync(blob, fp);
+						ok++;
+					} else {
+						skip++;
+					}
+				} catch {
+					skip++;
+				}
+			}
+			new Notice(`已回滚到「${cp.label}」：还原/删除 ${ok} 个文件${skip ? `，${skip} 个跳过（快照缺失）` : ''}；原内容已备份到 scratchpad/rollback-backup/${stamp}`, 6000);
+		} catch (err) {
+			new Notice(`回滚失败：${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
 	private updateSidEl(): void {
 		if (!this.sidEl) return;
 		const sid = this.activeTab.sessionId;
 		// v1.0.16：ID 复制按钮——有会话才显示（无会话隐藏，图标按钮不再占信息行文本宽度）
 		this.sidEl.toggleClass('codem-is-hidden', !sid);
+		this.ckptBtnEl?.toggleClass('codem-is-hidden', !sid); // v1.1.0 checkpoint 按钮同规则显隐
 		if (this.infoTitleEl) {
 			const title = sid ? (this.plugin.settings.sessionTitles[sid] ?? '') : '';
 			this.infoTitleEl.setText(title);
@@ -2201,12 +2516,24 @@ export class CodeMChatView extends ItemView {
 		params: Record<string, unknown>,
 		respond: (result: unknown) => void
 	): void {
-		// 按 sessionId 路由到发起 tab；匹配不到时优先回退到唯一执行中的 tab（防多 tab 下
-		// 回落到新建空会话 → 找不到渲染状态 → 权限被默认取消）；都没有才退回当前 tab
-		const tab =
-			this.tabs.find((t) => t.sessionId === params.sessionId) ??
-			this.tabs.find((t) => t.busy && t.current) ??
-			this.activeTab;
+		// 按 sessionId 路由到发起 tab；匹配不到时仅当“恰好一个执行中 tab”才回退（单会话场景兼容）。
+		// v1.1.0 P1-3：多会话并行时不再盲选首个 busy（权限卡会挂到错误会话）——无法定位即明确取消并提示；
+		// 都不 busy 才退回当前 tab（迟到权限由下方“对话已结束”分支处理）
+		const sidHit = this.tabs.filter((t) => t.sessionId === params.sessionId);
+		const busyTabs = this.tabs.filter((t) => t.busy && t.current);
+		let tab: ChatTab;
+		if (sidHit.length) {
+			tab = sidHit[0];
+		} else if (busyTabs.length === 1) {
+			tab = busyTabs[0];
+		} else if (busyTabs.length > 1) {
+			const name = (params.toolCall as { title?: string } | undefined)?.title ?? '工具';
+			new Notice(`CodeM：${name} 的权限请求无法定位所属会话（多个会话并行执行），已取消请重试`);
+			respond({ outcome: { outcome: 'cancelled' } });
+			return;
+		} else {
+			tab = this.activeTab;
+		}
 		const st = tab.current;
 		const toolCall = params.toolCall as { toolCallId?: string; title?: string; rawInput?: unknown } | undefined;
 		const toolName = toolCall?.title ?? '工具';
@@ -2816,6 +3143,12 @@ export class CodeMChatView extends ItemView {
 			this.switchTab(holder);
 			return;
 		}
+		// v1.1.0 P1-2：跨视图占用——同一会话已在另一视图/窗口打开时拒绝（本视图查 tabs 管不到别的 leaf）
+		const otherView = sessionOwners.get(card.sessionId);
+		if (otherView && otherView !== this.viewId) {
+			new Notice('该会话正在另一个视图窗口中打开（防止串台已拦截）——请到那个窗口继续，或先关闭它');
+			return;
+		}
 		tab.busy = true;
 		tab.scrollEl.empty();
 		this.resetTurnNav();
@@ -2858,6 +3191,7 @@ export class CodeMChatView extends ItemView {
 			if (loaded) {
 				tab.sessionId = card.sessionId;
 				tab.pendingContext = null;
+				sessionOwners.set(card.sessionId, this.viewId); // v1.1.0 P1-2：登记跨视图占用
 				if (tab === this.activeTab) this.updateSidEl();
 			} else {
 				// 软续接兜底：原生 load 失败（被占用/不可载入）时，把历史轮次做成快照，
@@ -3101,9 +3435,48 @@ export class CodeMChatView extends ItemView {
 		try {
 			const client = await this.ensureClient();
 			await client.loadSession(tab.sessionId!);
+			sessionOwners.set(tab.sessionId!, this.viewId); // v1.1.0 P1-2：登记跨视图占用
 			// load 成功：重放通知因 tab.current 为空被忽略，不污染时间线
 		} catch {
 			// 被占用/不可载入：留 sessionId，下次发送时会自动新建会话并带软续接
+		}
+		// v1.1.0 P1-1：setState 恢复不再空壳——无论 load 成败都按磁盘 jsonl 回显历史消息
+		void this.replayTabHistory(tab);
+	}
+
+	/** v1.1.0 P1-1：按 sessionId 找磁盘会话卡并重放历史消息到对应 tab（只回显不 load，被外部占用也能看历史） */
+	private async replayTabHistory(tab: ChatTab): Promise<void> {
+		try {
+			const cards = await listCodemSessions();
+			const card = cards.find((c) => c.sessionId === tab.sessionId);
+			if (!card) return;
+			const turns = await readCodemSessionTurns(card.filePath);
+			// 用户已在该 tab 产出新内容（续聊过）就不覆盖：仅空壳（无消息）时回放
+			if (tab.scrollEl.querySelector('.codem-chat-msg')) return;
+			tab.scrollEl.empty();
+			const merged: Turn[] = [];
+			for (const t of turns) {
+				const isResult = t.role === 'tool' && t.blocks.length === 1 && t.blocks[0].kind === 'tool_result';
+				if (isResult && merged.length) {
+					let attached = false;
+					for (let k = merged.length - 1; k >= 0; k--) {
+						if (merged[k].role === 'user') break; // 不跨用户消息配对
+						const tu = [...merged[k].blocks].reverse().find((b) => b.kind === 'tool_use');
+						if (tu) {
+							tu.content += '\n——— 结果 ———\n' + t.blocks[0].content;
+							attached = true;
+							break;
+						}
+					}
+					if (attached) continue;
+				}
+				merged.push(t);
+			}
+			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
+			if (!turns.length) this.renderEmpty(tab.scrollEl);
+			tab.scrollEl.scrollTop = tab.scrollEl.scrollHeight;
+		} catch {
+			// 回放失败：保持空 tab，不影响使用
 		}
 	}
 }
