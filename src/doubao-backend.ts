@@ -224,7 +224,13 @@ export class DoubaoBackend implements AgentBackend {
 					return;
 				}
 				// 首轮回填云端真 ID（后续轮 --resume）；resume 轮 sidSeen 应等于 realId，不覆盖
-				if (sidSeen && !realId) this.realIds.set(sessionId, sidSeen);
+				if (sidSeen && !realId) {
+				 this.realIds.set(sessionId, sidSeen);
+				 // 连聊修复：view 轮末会把 tab.sessionId 替换为云端真 ID（S3 本地索引用），
+				 // 下一轮 prompt 传来的是真 ID 本身——补真 ID→真 ID 自映射，否则查不到映射
+				 // → 不带 --resume → 每轮开新会话、上下文全丢
+				 this.realIds.set(sidSeen, sidSeen);
+				}
 				// 伪流式：整轮正文拆 chunk 渐推，复用 view 打字机动画；取消可打断
 				void this.pushChunks(sessionId, answer).then(() => {
 					if (this.cancelling.delete(sessionId)) resolve('cancelled');
