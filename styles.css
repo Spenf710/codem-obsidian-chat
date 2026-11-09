@@ -1836,13 +1836,13 @@ mark.codem-chat-search-hit.is-current {
 /* —— F5: 重新生成按钮 —— */
 
 .codem-chat-regen-btn {
-	position: absolute;
-	top: 4px;
-	right: 60px; /* 在 copy (4px) + fork (32px) 之后；宽度自适应文字（S3-fix：原 24px 图标方块包不住「↻ 重新生成」） */
+	/* S4-fix：改文档流右对齐——原 absolute 右上角悬浮，按钮自适应宽度后遮挡正文首行 */
+	display: flex;
+	width: fit-content;
 	height: 24px;
-	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+	margin: 6px 0 0 auto;
 	padding: 0 8px;
 	white-space: nowrap;
 	font-size: var(--font-ui-smaller);
@@ -1853,7 +1853,6 @@ mark.codem-chat-search-hit.is-current {
 	cursor: pointer;
 	opacity: 0;
 	transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
-	z-index: 5;
 }
 
 .codem-chat-msg:hover .codem-chat-regen-btn {
