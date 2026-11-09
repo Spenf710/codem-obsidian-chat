@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import type { AgentBackend, AgentBackendCapabilities } from './agent-backend';
 
 export interface AcpOptions {
 	cliPath: string;
@@ -124,7 +125,15 @@ interface Pending {
  * 协议事实（2026-10-10 探针实测）：initialize 返回 protocolVersion=1 与 loadSession 等
  * capabilities；session/prompt 经 session/update 流式推送、最终响应 {stopReason}。
  */
-export class AcpClient {
+export class AcpClient implements AgentBackend {
+	/** 后端标识（AgentBackend.name，日志/调试用） */
+	readonly name = 'codem-acp';
+	/** ACP 全能力：流式推送 / 反向权限请求 / 会话重放（豆包后端三项均 false） */
+	readonly capabilities: AgentBackendCapabilities = {
+		streaming: true,
+		permissionRequests: true,
+		sessionReplay: true,
+	};
 	private child: ChildProcess | null = null;
 	private nextId = 1;
 	private pending = new Map<number, Pending>();

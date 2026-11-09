@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type CodeMChatPlugin from './main';
 import { AcpClient, runCodemHeadless, expandPath, type AcpOptions } from './acp-client';
+import type { AgentBackend } from './agent-backend';
 import { renderMarkdown } from './markdown';
 
 // —— v1.1.0 P1-2：跨视图会话占用注册表（模块级，所有视图实例共享）——
@@ -240,7 +241,7 @@ function setToolStatus(el: HTMLElement, status: string): void {
 /** 右侧边栏聊天视图（ACP 架构）：流式/思考/工具/权限确认/内联候选/轮次导航/历史续接 */
 export class CodeMChatView extends ItemView {
 	plugin: CodeMChatPlugin;
-	private client: AcpClient | null = null;
+	private client: AgentBackend | null = null;
 	private inputEl!: HTMLTextAreaElement;
 	private permBtn!: HTMLButtonElement;
 	/** 权限 chip 的文案 span（v0.5.2：紧凑短词 + ▾，与智能/推理 chip 同构） */
@@ -1582,7 +1583,7 @@ export class CodeMChatView extends ItemView {
 		this.ctxMeterEl.toggleClass('is-warn', pct >= 80);
 	}
 
-	private async ensureClient(): Promise<AcpClient> {
+	private async ensureClient(): Promise<AgentBackend> {
 		if (this.client) return this.client;
 		this.client = new AcpClient(
 			this.pluginOpts(),
