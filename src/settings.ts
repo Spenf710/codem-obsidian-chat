@@ -88,12 +88,17 @@ export class CodeMSettingTab extends PluginSettingTab {
 					.onChange(async (v) => {
 						this.plugin.settings.backend = v as 'codem' | 'doubao';
 						await this.plugin.saveSettings();
+						// 切换立即生效：通知所有打开的聊天视图杀旧后端并按新后端重渲染（无需重开窗口）
+						for (const leaf of this.app.workspace.getLeavesOfType('codem-chat-view')) {
+							const view = leaf.view as { switchBackend?: () => void } | undefined;
+							view?.switchBackend?.();
+						}
 					})
 		);
 
 		new Setting(containerEl)
 			.setName('豆包 CLI 路径')
-			.setDesc('doubao.exe 完整路径，留空用默认位置（%LOCALAPPDATA%\\doubao_cli\\app\\current\\doubao.exe）；仅豆包后端使用')
+			.setDesc('推荐 doubao.exe 原生路径，留空用默认位置（%LOCALAPPDATA%\\doubao_cli\\app\\current\\doubao.exe）；填 doubao.cmd 也可，将自动升级为原生 exe')
 			.addText((text) =>
 				text
 				.setPlaceholder('留空自动探测')

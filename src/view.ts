@@ -707,6 +707,10 @@ export class CodeMChatView extends ItemView {
 		}
 		const status = await checkEnvironment(this.plugin.settings.codemCliPath, this.plugin.settings.nodePath);
 		if (!el.isConnected) return; // 检测期间用户已开始对话
+		// 竞态防护：环境检查期间后端已切豆包 → 重新路由（防迟到的 CodeM 状态覆盖豆包欢迎页）；
+		// 局部变量绕过 TS 控制流窄化（函数开头分支让 TS 误判此处不可能为 'doubao'，await 期间实际可变）
+		const backendNow: string = this.plugin.settings.backend;
+		if (backendNow === 'doubao') return void this.renderEmptyContent(el);
 		el.empty();
 
 		if (status.state === 'ready') {
@@ -783,6 +787,21 @@ export class CodeMChatView extends ItemView {
 
 	/** 外部触发空状态重渲染（设置页完成安装后回调） */
 	refreshEnvironment(): void {
+		const el = this.msgContainer.querySelector('.codem-chat-empty');
+		if (el) void this.renderEmptyContent(el as HTMLElement);
+	}
+
+	/**
+	 * 后端切换（设置页回调，切换立即生效无需重开窗口）：释放会话、杀旧后端连接/进程、
+	 * 清会话绑定（下轮发送时按新后端新建会话），空状态按新后端立即重渲染。
+	 */
+	switchBackend(): void {
+		for (const t of this.tabs) this.releaseSession(t);
+		this.restarting = true; // 抑制旧后端 stop 触发的“服务已断开”误报（1s 后复位）
+		this.client?.stop();
+		this.client = null;
+		for (const t of this.tabs) t.sessionId = null;
+		window.setTimeout(() => (this.restarting = false), 1000);
 		const el = this.msgContainer.querySelector('.codem-chat-empty');
 		if (el) void this.renderEmptyContent(el as HTMLElement);
 	}

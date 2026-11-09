@@ -109,6 +109,28 @@ export class DoubaoBackend implements AgentBackend {
 			.join('\n\n');
 	}
 
+	/**
+	 * 解析实际启动目标：.exe 直启；.cmd/.bat wrapper（npm 全局装法）优先升级为原生
+	 * doubao.exe（固定落点探测，绕开 cmd /c 转义与 8191 字符限制）；探测不到时回退 cmd /c 包装保底。
+	 */
+	private resolveSpawnTarget(): { exe: string; wrap: boolean } {
+		const p = this.opts.cliPath;
+		if (/\.(cmd|bat)$/i.test(p)) {
+			const native = defaultDoubaoExe();
+			try {
+				if (fs.existsSync(native)) {
+					this.log(`cliPath=${p} 为 npm wrapper，已自动升级为原生 exe：${native}`);
+					return { exe: native, wrap: false };
+				}
+			} catch {
+				// 探测失败走 cmd 包装
+			}
+			this.log(`cliPath=${p} 为 npm wrapper 且未找到原生 exe，回退 cmd /c 包装（长文本受限）`);
+			return { exe: p, wrap: true };
+		}
+		return { exe: p, wrap: false };
+	}
+
 	prompt(sessionId: string, blocks: PromptBlock[]): Promise<string> {
 		const text = this.blocksToText(blocks);
 		if (!text.trim()) return Promise.reject(new Error('豆包后端收到空提示词'));
@@ -123,12 +145,28 @@ export class DoubaoBackend implements AgentBackend {
 		return new Promise<string>((resolve, reject) => {
 			let child: ChildProcess;
 			try {
-				// exe 直启（Node args 数组原样传递，无 cmd /c 转义与 8191 上限）；stdin 关闭——无交互通道
-				child = spawn(this.opts.cliPath, args, {
+				const { exe, wrap } = this.resolveSpawnTarget();
+				if (wrap) {
+					// 保底路径：npm wrapper 经 cmd /c 启动（多行长文本受 8191 字符限制）
+					const comspec =
+					process.env.ComSpec && fs.existsSync(process.env.ComSpec)
+				? process.env.ComSpec
+				: 'C:\\Windows\\System32\\cmd.exe';
+					this.log(`spawn(cmd /c) ${exe}`);
+					child = spawn(comspec, ['/c', exe, ...args], {
+						cwd: this.opts.cwd,
+							windowsHide: true,
+							stdio: ['ignore', 'pipe', 'pipe'],
+					});
+					} else {
+				// exe 直启（Node args 数组原样传递）；stdin 关闭——无交互通道
+					this.log(`spawn(direct) ${exe}`);
+					child = spawn(exe, args, {
 					cwd: this.opts.cwd,
-					windowsHide: true,
-					stdio: ['ignore', 'pipe', 'pipe'],
-				});
+				windowsHide: true,
+				  stdio: ['ignore', 'pipe', 'pipe'],
+				 });
+				}
 			} catch (e) {
 				reject(e instanceof Error ? e : new Error(String(e)));
 				return;
