@@ -257,6 +257,9 @@ export class CodeMChatView extends ItemView {
 	private ctxMeterEl: HTMLElement | null = null;
 	/** 队列面板（v0.8.0 叶部式：全量列表 + Steer + 清空 + 逐条编辑/删除/重排） */
 	private queueEl: HTMLElement | null = null;
+	/** 后端切换 chip（豆包集成 S4）：CodeM / 豆包 CLI 图标与文案 span（切换后同步） */
+	private backendLabelEl: HTMLElement | null = null;
+	private backendIconEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
@@ -526,6 +529,38 @@ export class CodeMChatView extends ItemView {
 			menu.showAtMouseEvent(e);
 		};
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
+		// 后端切换 chip（豆包集成 S4）：CodeM（ACP）/ 豆包 CLI 点击即切，免进设置页；三段式同权限 chip
+		const backendBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-backend', attr: { type: 'button' } });
+		const backendInner = backendBtn.createSpan({ cls: 'codem-chat-chip-inner' });
+		this.backendIconEl = backendInner.createSpan({ cls: 'codem-chat-chip-icon' });
+		this.backendLabelEl = backendInner.createSpan({ cls: 'codem-chat-chip-value' });
+		backendInner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
+		backendBtn.setAttribute('aria-label', '对话后端：CodeM（ACP）/ 豆包 CLI，点击切换');
+		backendBtn.onclick = (e) => {
+			const menu = new Menu();
+			const items: Array<{ id: 'codem' | 'doubao'; title: string; icon: string }> = [
+				{ id: 'codem', title: 'CodeM（ACP 流式）', icon: 'message-square' },
+				{ id: 'doubao', title: '豆包 CLI（豆包工作）', icon: 'sparkles' },
+			];
+			for (const it of items) {
+					menu.addItem((mi) =>
+						mi.setTitle(it.title).setIcon(it.icon).setChecked(this.plugin.settings.backend === it.id).onClick(() => {
+							if (this.plugin.settings.backend === it.id) return;
+							void (async () => {
+								this.plugin.settings.backend = it.id;
+								await this.plugin.saveSettings();
+								this.switchBackend(); // 杀旧后端 + 清会话绑定 + 空状态重渲染 + chip 同步
+								new Notice(
+									it.id === 'doubao' ? '已切换到豆包 CLI，新对话将走豆包' : '已切换到 CodeM，新对话将走 CodeM',
+									3000
+								);
+							})();
+						})
+					);
+			}
+			menu.showAtMouseEvent(e);
+		};
+		this.updateBackendChip();
 		// 智能强度 chip（v1.0.5 对齐原生命名）：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
 		this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v), 'gauge');
 		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
@@ -804,6 +839,7 @@ export class CodeMChatView extends ItemView {
 		this.client = null;
 		for (const t of this.tabs) t.sessionId = null;
 		window.setTimeout(() => (this.restarting = false), 1000);
+		this.updateBackendChip(); // 设置页切后端也走这里，chip 图标/文案同步
 		const el = this.msgContainer.querySelector('.codem-chat-empty');
 		if (el) void this.renderEmptyContent(el as HTMLElement);
 	}
@@ -1245,6 +1281,13 @@ export class CodeMChatView extends ItemView {
 
 	/** 构建「标签 值 ▾」chip（v0.6.0 三段式对齐叶部：label 淡灰/语义色 + value 半粗 + chevron 淡显）；
 	 *  点击弹菜单选值，空串 = 跟随配置不传参 */
+	/** 后端 chip 同步（豆包集成 S4）：快捷切换/设置页切换后更新图标与文案 */
+	private updateBackendChip(): void {
+		const isDoubao = this.plugin.settings.backend === 'doubao';
+		this.backendLabelEl?.setText(isDoubao ? '豆包' : 'CodeM');
+		if (this.backendIconEl) setIcon(this.backendIconEl, isDoubao ? 'sparkles' : 'message-square');
+	}
+
 	private buildOptChip(
 		host: HTMLElement,
 		label: string,

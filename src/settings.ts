@@ -83,7 +83,7 @@ export class CodeMSettingTab extends PluginSettingTab {
 		// —— 对话后端（豆包集成 S2）：切换后重新打开聊天窗口生效 ——
 		new Setting(containerEl)
 			.setName('对话后端')
-			.setDesc('CodeM（ACP 流式）或豆包 CLI（每轮单次调用）；切换后重新打开聊天窗口生效')
+			.setDesc('CodeM（ACP 流式）或豆包 CLI（每轮单次调用）；切换立即生效（聊天框底部也有快捷切换 chip）')
 			.addDropdown((dd) =>
 				dd
 					.addOption('codem', 'CodeM（ACP）')
