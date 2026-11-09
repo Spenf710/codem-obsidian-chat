@@ -260,6 +260,8 @@ export class CodeMChatView extends ItemView {
 	/** 后端切换 chip（豆包集成 S4）：CodeM / 豆包 CLI 图标与文案 span（切换后同步） */
 	private backendLabelEl: HTMLElement | null = null;
 	private backendIconEl: HTMLElement | null = null;
+	/** 信息行品牌标识（S4-fix）：✳ CodeM / ✳ 豆包，随切换同步 */
+	private agentBrandEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
@@ -467,7 +469,8 @@ export class CodeMChatView extends ItemView {
 		// 信息行（输入框上方，只放只读事实——用户实测叶部位置在输入框上方，v0.6.2 修正）
 		const infoRow = root.createDiv({ cls: 'codem-chat-info-row' });
 		this.lightEl = infoRow.createSpan({ cls: 'codem-chat-light is-idle' });
-		infoRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
+		// 后端品牌标识（S4-fix）：随 codem/doubao 切换同步，不再写死 CodeM
+		this.agentBrandEl = infoRow.createSpan({ cls: 'codem-chat-agent', text: '✳ CodeM' });
 		this.sidEl = infoRow.createEl('button', { cls: 'codem-chat-iconbtn codem-chat-sid-btn', attr: { type: 'button', 'aria-label': '复制完整会话 ID', title: '复制完整会话 ID' } });
 		setIcon(this.sidEl, 'clipboard-copy');
 		// v1.0.16：ID 复制按钮——点击复制完整 session_id（排错定位 jsonl），有会话才显示
@@ -499,7 +502,7 @@ export class CodeMChatView extends ItemView {
 		this.renderTabs();
 		this.inputEl = inputWrap.createEl('textarea', {
 			cls: 'codem-chat-input',
-			attr: { placeholder: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）', rows: 2 },
+			attr: { placeholder: this.inputPlaceholder(), rows: 2 },
 		});
 		// 工具栏（输入框内底部，只放可操作控件——叶部 v1.8.0 Composer 重排结构）
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
@@ -1118,12 +1121,19 @@ export class CodeMChatView extends ItemView {
 
 	/** 停止按钮与输入框提示跟随当前 tab 执行状态（setStatusLight 是所有状态切换汇聚点）。
 	 *  v0.6.0：停止按钮常驻（叶部式），空闲为禁用态而非隐藏 */
+	/** 输入框占位符（S4-fix）：文案随 codem/doubao 后端切换 */
+	private inputPlaceholder(): string {
+		return this.plugin.settings.backend === 'doubao'
+			? '询问豆包，/ 技能，@ 文件…（Enter 发送）'
+			: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）';
+	}
+
 	private syncStopUi(): void {
 		if (!this.stopBtn) return;
 		this.stopBtn.disabled = !this.activeTab.busy;
 		this.inputEl.placeholder = this.activeTab.busy
 			? '执行中…按 Esc 或点击「⏹ 停止」可中途停止'
-			: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）';
+			: this.inputPlaceholder();
 	}
 
 	/** 中途停止当前 tab 正在执行的一轮（ESC / ⏹ 按钮），已流出的正文保留 */
@@ -1286,6 +1296,9 @@ export class CodeMChatView extends ItemView {
 		const isDoubao = this.plugin.settings.backend === 'doubao';
 		this.backendLabelEl?.setText(isDoubao ? '豆包' : 'CodeM');
 		if (this.backendIconEl) setIcon(this.backendIconEl, isDoubao ? 'sparkles' : 'message-square');
+		// S4-fix：品牌标识与输入框占位符同步切换（左上角 ✳ CodeM → ✳ 豆包）
+		this.agentBrandEl?.setText(isDoubao ? '✳ 豆包' : '✳ CodeM');
+		if (this.inputEl && !this.activeTab.busy) this.inputEl.placeholder = this.inputPlaceholder();
 	}
 
 	private buildOptChip(
