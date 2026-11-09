@@ -10,6 +10,7 @@ import {
 	abbreviateHome,
 	type EnvStatus,
 } from './diagnostics';
+import type { DoubaoSessionMeta } from './codem-sessions';
 
 export interface CodeMSettings {
 	/** 对话后端：codem（ACP 长驻双向流）/ doubao（每轮 -p 单次调用，S2 新增） */
@@ -18,6 +19,8 @@ export interface CodeMSettings {
 	codemCliPath: string;
 	/** doubao.exe 完整路径，空 = 默认位置探测（S2 新增） */
 	doubaoCliPath: string;
+	/** 豆包会话本地索引（S3：云端会话不落盘，历史面板数据源；key = 云端会话真 ID） */
+	doubaoSessions: Record<string, DoubaoSessionMeta>;
 	/** Node.js 所在目录（codem.cmd 需要）；留空自动探测 */
 	nodePath: string;
 	/** 无头模式单次调用超时（毫秒） */
@@ -48,6 +51,7 @@ export const DEFAULT_SETTINGS: CodeMSettings = {
 	backend: 'codem',
 	codemCliPath: '~/.codem/bin/codem.cmd',
 	doubaoCliPath: '',
+	doubaoSessions: {},
 	nodePath: '',
 	timeoutMs: 300000,
 	extraArgs: '',

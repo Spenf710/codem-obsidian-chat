@@ -88,6 +88,11 @@ export class DoubaoBackend implements AgentBackend {
 		return 'dbp-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 	}
 
+	/** 会话键对应的云端真 ID（AgentBackend.getRealSessionId；首轮 stderr 回填后可得，未回填返回原值） */
+	getRealSessionId(sessionId: string): string {
+		return this.realIds.get(sessionId) ?? sessionId;
+	}
+
 	/**
 	 * 载入即登记：豆包会话存云端，无独立 load 动作（无重放通知），续接在下一轮 prompt
 	 * 经 --resume 实现；失效会话在下一轮以错误形式暴露，由 view 软续接兜底。

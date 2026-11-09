@@ -29,6 +29,8 @@ export interface AgentBackend {
 	newSession(): Promise<string>;
 	/** 发送一轮对话（content blocks），resolve 值为 stopReason */
 	prompt(sessionId: string, blocks: PromptBlock[]): Promise<string>;
+	/** 会话的远端真实 ID（豆包：占位 ID → 云端真 ID；ACP 会话 ID 即真实 ID，原样返回） */
+	getRealSessionId(sessionId: string): string;
 	/** 载入历史会话（豆包对应 --resume 语义），载入后可继续 prompt */
 	loadSession(sessionId: string, cwd?: string): Promise<void>;
 	/** 释放会话（豆包为 no-op：每轮独立进程，无 daemon 占用） */

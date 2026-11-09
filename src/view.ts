@@ -29,6 +29,7 @@ import {
 	listCodemSessions,
 	readCodemSessionTurns,
 	listCodemSkills,
+	doubaoSessionCards,
 	type SessionCard,
 	type SkillInfo,
 	type Turn,
@@ -184,6 +185,7 @@ function sourceLabel(c: SessionCard): string {
 	if (c.source === 'tui') return '终端';
 	if (c.source === 'app') return '客户端';
 	if (c.source === 'subagent') return '子代理';
+	if (c.source === 'doubao') return '豆包';
 	if (!c.source && /Obsidian Vault/i.test(c.cwd)) return 'Obsidian插件';
 	return '本地';
 }
@@ -1467,6 +1469,11 @@ export class CodeMChatView extends ItemView {
 			new Notice('会话执行中，等本轮结束再回滚');
 			return;
 		}
+		// 豆包后端（S3）：会话正文存云端，无本地 jsonl 快照可回滚
+		if (this.plugin.settings.backend === 'doubao') {
+			new Notice('豆包会话不支持本地快照回滚（历史正文存于云端）');
+			return;
+		}
 		const cards = await listCodemSessions();
 		const card = cards.find((c) => c.sessionId === sid);
 		if (!card) {
@@ -1878,6 +1885,22 @@ export class CodeMChatView extends ItemView {
 			const reason = await client.prompt(tab.sessionId, blocks);
 			// 本轮已被 watchdog 强制收尾接管：丢弃迟到结果，不再渲染时间线/标题
 			if (seq !== tab.turnSeq) return;
+			// —— 豆包（S3）：占位 ID → 云端真 ID 同步 + 本地索引（历史面板数据源）——
+			if (this.plugin.settings.backend === 'doubao' && tab.sessionId) {
+				const realId = client.getRealSessionId(tab.sessionId);
+				if (realId && realId !== tab.sessionId) {
+					tab.sessionId = realId; // 后续轮 / 历史索引 / 持久化统一用云端真 ID
+					if (tab === this.activeTab) this.updateSidEl();
+				}
+				const prev = this.plugin.settings.doubaoSessions[tab.sessionId];
+				this.plugin.settings.doubaoSessions[tab.sessionId] = {
+					firstPrompt: prev?.firstPrompt || rawPrompt.slice(0, 80),
+					userTurns: tab.turnCount,
+					lastTime: new Date().toISOString(),
+					cwd: prev?.cwd,
+					};
+				void this.plugin.saveSettings();
+			}
 			// 用户中途停止（session/cancel）：已流出正文保留，时间线打停止标记
 			if (reason === 'cancelled') {
 				wasCancelled = true;
@@ -3021,11 +3044,18 @@ export class CodeMChatView extends ItemView {
 			this.histEl.hide();
 		}
 		this.histEl.empty();
-		this.histEl.createDiv({ cls: 'codem-hist-loading', text: '扫描 ~/.codem/sessions …' });
+		this.histEl.createDiv({
+			cls: 'codem-hist-loading',
+			text: this.plugin.settings.backend === 'doubao' ? '读取豆包会话索引…' : '扫描 ~/.codem/sessions …',
+		});
 		this.histEl.show();
 		this.histOpen = true;
 		try {
-			this.allCards = await listCodemSessions();
+			// 豆包后端（S3）：历史面板读本地索引（云端会话不落盘）；CodeM 扫描 jsonl
+			this.allCards =
+				this.plugin.settings.backend === 'doubao'
+					? doubaoSessionCards(this.plugin.settings.doubaoSessions ?? {})
+					: await listCodemSessions();
 		} catch (e) {
 			new Notice(`扫描历史会话失败：${e instanceof Error ? e.message : String(e)}`);
 			this.closeHistory();
@@ -3217,7 +3247,8 @@ export class CodeMChatView extends ItemView {
 		this.resetTurnNav();
 		tab.scrollEl.createDiv({ cls: 'codem-chat-empty', text: '载入历史会话…' });
 		try {
-			const turns = await readCodemSessionTurns(card.filePath);
+			// 豆包卡片（S3）：无本地 jsonl，turns 为空——载入即 --resume 云端续聊
+			const turns = card.source === 'doubao' ? [] : await readCodemSessionTurns(card.filePath);
 			const client = await this.ensureClient();
 			// cwd 必须传会话自己的原始 cwd（探针实测：会话按 cwd hash 隔离，传错目录报 does not exist）；
 			// 换会话前先释放本连接持有的旧会话（daemon 层 writer 占位会堵死旧会话下次 load）
@@ -3267,6 +3298,12 @@ export class CodeMChatView extends ItemView {
 				);
 			}
 			tab.scrollEl.empty();
+			// 豆包卡片（S3）：无本地正文可回显，提示云端续聊语义
+			if (card.source === 'doubao') {
+				tab.scrollEl
+					.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
+					.setText('☁ 已载入豆包会话（云端上下文已保留）——历史消息不本地回显，直接继续对话即可');
+			}
 			// v1.0.4：tool_result 并入前一个 tool_use 卡片——结果跟卡片走（叶部/Claudian 同构），
 			// 消灭游离的裸奔「工具结果」行；跨用户消息不配对，配不上保留原样兜底
 			const merged: Turn[] = [];

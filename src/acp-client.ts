@@ -309,6 +309,11 @@ export class AcpClient implements AgentBackend {
 		return r.stopReason;
 	}
 
+	/** ACP 会话 ID 即真实 ID（AgentBackend.getRealSessionId） */
+	getRealSessionId(sessionId: string): string {
+		return sessionId;
+	}
+
 	/**
 	 * 载入历史会话（loadSession capability 实测可用）。resolve 后原 sessionId 即可续接 prompt。
 	 * 探针实测：cwd 必须传会话自己的原始 cwd（会话按 cwd hash 隔离存储，传错目录报 "session does not exist"）。

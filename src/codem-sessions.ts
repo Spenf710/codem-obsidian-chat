@@ -402,3 +402,31 @@ export async function listCodemSkills(): Promise<SkillInfo[]> {
 	}
 	return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+// ===== 豆包会话本地索引（S3：云端会话不落盘，历史面板数据源，存插件 data.json）=====
+
+/** 豆包会话索引条目（key = 云端会话真 ID，由 getRealSessionId 回填） */
+export interface DoubaoSessionMeta {
+	firstPrompt: string;
+	userTurns: number;
+	lastTime: string;
+	cwd?: string;
+}
+
+/** 豆包本地索引 → 历史面板卡片（filePath 空：无本地正文可回显，载入走 --resume 云端续聊） */
+export function doubaoSessionCards(store: Record<string, DoubaoSessionMeta>): SessionCard[] {
+	return Object.entries(store ?? {})
+		.filter(([id, m]) => !!id && !!m?.firstPrompt)
+		.map(([sessionId, m]) => ({
+			sessionId,
+			filePath: '',
+			firstPrompt: m.firstPrompt.slice(0, 80),
+			startTime: '',
+			lastTime: m.lastTime || '',
+			userTurns: m.userTurns ?? 0,
+			toolCalls: 0,
+			cwd: m.cwd ?? '',
+			source: 'doubao',
+		}))
+		.sort((a, b) => (b.lastTime || '').localeCompare(a.lastTime || ''));
+}

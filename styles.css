@@ -1838,12 +1838,14 @@ mark.codem-chat-search-hit.is-current {
 .codem-chat-regen-btn {
 	position: absolute;
 	top: 4px;
-	right: 60px; /* 在 copy (4px) + fork (32px) 之后 */
-	width: 24px;
+	right: 60px; /* 在 copy (4px) + fork (32px) 之后；宽度自适应文字（S3-fix：原 24px 图标方块包不住「↻ 重新生成」） */
 	height: 24px;
-	display: flex;
+	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+	padding: 0 8px;
+	white-space: nowrap;
+	font-size: var(--font-ui-smaller);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 4px;
 	background: var(--background-primary);
@@ -1851,7 +1853,6 @@ mark.codem-chat-search-hit.is-current {
 	cursor: pointer;
 	opacity: 0;
 	transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
-	padding: 0;
 	z-index: 5;
 }
 
