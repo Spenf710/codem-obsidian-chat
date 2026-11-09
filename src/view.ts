@@ -4,6 +4,7 @@ import * as path from 'path';
 import type CodeMChatPlugin from './main';
 import { AcpClient, runCodemHeadless, expandPath, type AcpOptions } from './acp-client';
 import type { AgentBackend } from './agent-backend';
+import { DoubaoBackend, defaultDoubaoExe } from './doubao-backend';
 import { renderMarkdown } from './markdown';
 
 // —— v1.1.0 P1-2：跨视图会话占用注册表（模块级，所有视图实例共享）——
@@ -681,6 +682,29 @@ export class CodeMChatView extends ItemView {
 
 	/** 空状态内容（异步）：按环境检测结果渲染引导或欢迎页 */
 	private async renderEmptyContent(el: HTMLElement): Promise<void> {
+		// —— 豆包后端（豆包集成 S2）：环境检查只看 doubao.exe 存在性（auth 检查 S4 接入）——
+		if (this.plugin.settings.backend === 'doubao') {
+			if (!el.isConnected) return;
+			el.empty();
+			const exe = expandPath(this.plugin.settings.doubaoCliPath || defaultDoubaoExe());
+			if (fs.existsSync(exe)) {
+				const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()];
+				el.createDiv({ cls: 'codem-chat-empty-icon', text: '✳' });
+				el.createDiv({ cls: 'codem-chat-empty-title', text: `${wd}好，豆包已就绪` });
+				el.createDiv({
+					cls: 'codem-chat-empty-sub',
+					text: '你的笔记库就是豆包的工作目录，直接开始提问吧。',
+				});
+			} else {
+				el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
+				el.createDiv({ cls: 'codem-chat-empty-title', text: '未找到豆包 CLI' });
+				el.createDiv({
+					cls: 'codem-chat-empty-sub',
+					text: `未在 ${exe} 找到 doubao.exe。请先执行 npm install -g @bytedance/doubao-cli 并完成登录，或在插件设置中填写 doubao.exe 路径。`,
+				});
+			}
+			return;
+		}
 		const status = await checkEnvironment(this.plugin.settings.codemCliPath, this.plugin.settings.nodePath);
 		if (!el.isConnected) return; // 检测期间用户已开始对话
 		el.empty();
@@ -1585,6 +1609,22 @@ export class CodeMChatView extends ItemView {
 
 	private async ensureClient(): Promise<AgentBackend> {
 		if (this.client) return this.client;
+		// —— 豆包后端（豆包集成 S2）：每轮独立进程，无长驻连接 ——
+		if (this.plugin.settings.backend === 'doubao') {
+			const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
+			this.client = new DoubaoBackend(
+				{
+					cliPath: expandPath(this.plugin.settings.doubaoCliPath || defaultDoubaoExe()),
+					cwd,
+					// 权限档位 S5 接 permMode 三档映射（manual/smart/yolo → ask_always/ask_risky/always_allow）
+					permissionMode: 'ask_risky',
+				},
+				{
+					onUpdate: (sid, u) => this.handleUpdate(sid, u),
+				}
+			);
+			return this.client;
+		}
 		this.client = new AcpClient(
 			this.pluginOpts(),
 			{
@@ -1959,6 +1999,8 @@ export class CodeMChatView extends ItemView {
 	 * 依据首轮用户问题 + 助手回复摘要；结果持久化到 settings.sessionTitles。
 	 */
 	private async generateTitle(tab: ChatTab, userText: string): Promise<void> {
+		// 豆包后端：无头标题调用依赖 codem CLI，跳过（S3 泛化 headless 到豆包后补）
+		if (this.plugin.settings.backend === 'doubao') return;
 		try {
 			const reply = tab.mdBuffer.replace(/\s+/g, ' ').slice(0, 600);
 			const ask = userText.replace(/\s+/g, ' ').replace(/["'`]/g, ' ').slice(0, 200);

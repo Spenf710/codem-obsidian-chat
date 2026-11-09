@@ -12,8 +12,12 @@ import {
 } from './diagnostics';
 
 export interface CodeMSettings {
+	/** 对话后端：codem（ACP 长驻双向流）/ doubao（每轮 -p 单次调用，S2 新增） */
+	backend: 'codem' | 'doubao';
 	/** codem.cmd 完整路径，~ 自动展开为用户目录 */
 	codemCliPath: string;
+	/** doubao.exe 完整路径，空 = 默认位置探测（S2 新增） */
+	doubaoCliPath: string;
 	/** Node.js 所在目录（codem.cmd 需要）；留空自动探测 */
 	nodePath: string;
 	/** 无头模式单次调用超时（毫秒） */
@@ -41,7 +45,9 @@ export interface CodeMSettings {
 }
 
 export const DEFAULT_SETTINGS: CodeMSettings = {
+	backend: 'codem',
 	codemCliPath: '~/.codem/bin/codem.cmd',
+	doubaoCliPath: '',
 	nodePath: '',
 	timeoutMs: 300000,
 	extraArgs: '',
@@ -69,6 +75,34 @@ export class CodeMSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+
+		// —— 对话后端（豆包集成 S2）：切换后重新打开聊天窗口生效 ——
+		new Setting(containerEl)
+			.setName('对话后端')
+			.setDesc('CodeM（ACP 流式）或豆包 CLI（每轮单次调用）；切换后重新打开聊天窗口生效')
+			.addDropdown((dd) =>
+				dd
+					.addOption('codem', 'CodeM（ACP）')
+					.addOption('doubao', '豆包 CLI')
+					.setValue(this.plugin.settings.backend)
+					.onChange(async (v) => {
+						this.plugin.settings.backend = v as 'codem' | 'doubao';
+						await this.plugin.saveSettings();
+					})
+		);
+
+		new Setting(containerEl)
+			.setName('豆包 CLI 路径')
+			.setDesc('doubao.exe 完整路径，留空用默认位置（%LOCALAPPDATA%\\doubao_cli\\app\\current\\doubao.exe）；仅豆包后端使用')
+			.addText((text) =>
+				text
+				.setPlaceholder('留空自动探测')
+				.setValue(this.plugin.settings.doubaoCliPath)
+				.onChange(async (v) => {
+					this.plugin.settings.doubaoCliPath = v;
+					await this.plugin.saveSettings();
+				})
+		);
 
 		// —— CodeM 环境（自检 + 一键安装）——
 		const envSetting = new Setting(containerEl).setName('CodeM 环境');
