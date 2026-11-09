@@ -1966,17 +1966,33 @@ export class CodeMChatView extends ItemView {
 					.setText('⏹ 已停止（本轮内容可能不完整）');
 			}
 			this.finishTurn(st, tab, reason === 'cancelled');
-		// v0.9.0（叶部式）：assistant 消息重新生成按钮 ↻
-		if (reason !== 'cancelled' && rawPrompt) {
-			const regenBtn = st.aiBlock.createEl('button', { cls: 'codem-chat-regen-btn', text: '↻ 重新生成' });
-			regenBtn.setAttribute('aria-label', '用同样的提问重新生成回复');
-			regenBtn.onclick = () => {
-				if (tab.busy) return;
-				// v1.0.8 P0-2：切回归属 tab 再发，否则 send() 会把消息发进当前激活会话
-				if (this.activeTab !== tab) this.switchTab(tab);
-				this.inputEl.value = rawPrompt;
-				void this.send();
+		// v0.9.0（叶部式）+ S4-fix：assistant 底部操作行——复制（左）与重新生成（右对齐）同一行
+		if (rawPrompt) {
+			const opsRow = st.aiBlock.createDiv({ cls: 'codem-chat-msg-ops codem-chat-ai-ops' });
+			// 消息级复制：整条回复全文（mdBuffer 在本轮内累积完成，finishTurn 不清空）
+			const answerText = tab.mdBuffer;
+			const copyBtn = opsRow.createEl('button', { cls: 'codem-chat-copy-btn' });
+			setIcon(copyBtn, 'copy');
+			copyBtn.setAttribute('aria-label', '复制此回复');
+			copyBtn.onclick = (e) => {
+				e.stopPropagation();
+				void navigator.clipboard.writeText(answerText).then(() => {
+					setIcon(copyBtn, 'check');
+					window.setTimeout(() => setIcon(copyBtn, 'copy'), 1500);
+				});
 			};
+			// 重新生成：用户停止的轮次不提供（正文可能不完整）
+			if (reason !== 'cancelled') {
+				const regenBtn = opsRow.createEl('button', { cls: 'codem-chat-regen-btn', text: '↻ 重新生成' });
+				regenBtn.setAttribute('aria-label', '用同样的提问重新生成回复');
+				regenBtn.onclick = () => {
+					if (tab.busy) return;
+					// v1.0.8 P0-2：切回归属 tab 再发，否则 send() 会把消息发进当前激活会话
+					if (this.activeTab !== tab) this.switchTab(tab);
+					this.inputEl.value = rawPrompt;
+					void this.send();
+				};
+			}
 		}
 			// 首轮结束后台生成会话标题（无头 -p 调用，静默失败）
 			if (tab.turnCount === 1 && tab.sessionId && !this.plugin.settings.sessionTitles[tab.sessionId]) {
@@ -2521,17 +2537,8 @@ export class CodeMChatView extends ItemView {
 			seg.el.appendChild(frag);
 		}
 		this.decorateCodeBlocks(seg.el);
-		// hover 复制按钮（Claudian 式：浮在文本段右下角，hover 才出现）
-		const copyBtn = seg.el.createEl('button', { cls: 'codem-chat-copy-btn' });
-		setIcon(copyBtn, 'copy');
-		copyBtn.setAttribute('aria-label', '复制此段');
-		copyBtn.onclick = (e) => {
-			e.stopPropagation();
-			void navigator.clipboard.writeText(seg.buf).then(() => {
-				setIcon(copyBtn, 'check');
-				window.setTimeout(() => setIcon(copyBtn, 'copy'), 1500);
-			});
-		};
+		// S4-fix：段级复制钮移除——复制收敛到消息底部操作行（与「↻ 重新生成」同排：左复制、右重新生成）；
+		// 多段消息（工具卡间隔）也只有一条消息级复制，消除每段一钮的视觉噪音
 	}
 
 	/** 渲染后处理（v0.5.0 UI 对标叶版）：代码块加语言标签 + hover 复制按钮（幂等，DOM API） */

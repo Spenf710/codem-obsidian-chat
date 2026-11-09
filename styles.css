@@ -1836,13 +1836,14 @@ mark.codem-chat-search-hit.is-current {
 /* —— F5: 重新生成按钮 —— */
 
 .codem-chat-regen-btn {
-	/* S4-fix：改文档流右对齐——原 absolute 右上角悬浮，按钮自适应宽度后遮挡正文首行 */
+	/* S4-fix：改文档流右对齐——原 absolute 右上角悬浮，按钮自适应宽度后遮挡正文首行；
+	   S4-fix2：移入 AI 底部操作行（.codem-chat-msg-ops），去自带上边距由行统一控制 */
 	display: flex;
 	width: fit-content;
 	height: 24px;
 	align-items: center;
 	justify-content: center;
-	margin: 6px 0 0 auto;
+	margin: 0 0 0 auto;
 	padding: 0 8px;
 	white-space: nowrap;
 	font-size: var(--font-ui-smaller);
