@@ -413,8 +413,8 @@ export interface DoubaoSessionMeta {
 	cwd?: string;
 }
 
-/** 豆包本地索引 → 历史面板卡片（filePath 空：无本地正文可回显，载入走 --resume 云端续聊） */
-export function doubaoSessionCards(store: Record<string, DoubaoSessionMeta>): SessionCard[] {
+/** 本地索引 → 历史面板卡片（filePath 空：无本地正文可回显，载入走 --resume 续聊；source 标注后端，Claude 复用同构） */
+export function doubaoSessionCards(store: Record<string, DoubaoSessionMeta>, source = 'doubao'): SessionCard[] {
 	return Object.entries(store ?? {})
 		.filter(([id, m]) => !!id && !!m?.firstPrompt)
 		.map(([sessionId, m]) => ({
@@ -426,7 +426,7 @@ export function doubaoSessionCards(store: Record<string, DoubaoSessionMeta>): Se
 			userTurns: m.userTurns ?? 0,
 			toolCalls: 0,
 			cwd: m.cwd ?? '',
-			source: 'doubao',
+			source,
 		}))
 		.sort((a, b) => (b.lastTime || '').localeCompare(a.lastTime || ''));
 }

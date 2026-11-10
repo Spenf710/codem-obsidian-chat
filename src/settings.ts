@@ -17,14 +17,18 @@ import {
 import type { DoubaoSessionMeta } from './codem-sessions';
 
 export interface CodeMSettings {
-	/** 对话后端：codem（ACP 长驻双向流）/ doubao（每轮 -p 单次调用，S2 新增） */
-	backend: 'codem' | 'doubao';
+	/** 对话后端：codem（ACP 长驻双向流）/ doubao（每轮 -p 单次调用）/ claude（stream-json 流式，CC 集成） */
+	backend: 'codem' | 'doubao' | 'claude';
 	/** codem.cmd 完整路径，~ 自动展开为用户目录 */
 	codemCliPath: string;
 	/** doubao.exe 完整路径，空 = 默认位置探测（S2 新增） */
 	doubaoCliPath: string;
 	/** 豆包会话本地索引（S3：云端会话不落盘，历史面板数据源；key = 云端会话真 ID） */
 	doubaoSessions: Record<string, DoubaoSessionMeta>;
+	/** Claude CLI 路径（claude.cmd 或原生 exe），空 = 默认探测（CC 集成） */
+	claudeCliPath: string;
+	/** Claude 会话本地索引（CC 集成；key = CLI 会话真 ID，历史面板数据源） */
+	claudeSessions: Record<string, DoubaoSessionMeta>;
 	/** Node.js 所在目录（codem.cmd 需要）；留空自动探测 */
 	nodePath: string;
 	/** 无头模式单次调用超时（毫秒） */
@@ -56,6 +60,8 @@ export const DEFAULT_SETTINGS: CodeMSettings = {
 	codemCliPath: '~/.codem/bin/codem.cmd',
 	doubaoCliPath: '',
 	doubaoSessions: {},
+	claudeCliPath: '',
+	claudeSessions: {},
 	nodePath: '',
 	timeoutMs: 300000,
 	extraArgs: '',
@@ -86,17 +92,18 @@ export class CodeMSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		// —— 对话后端（豆包集成 S2）：切换后重新打开聊天窗口生效 ——
+		// —— 对话后端（豆包集成 S2 / CC 集成）：切换立即生效 ——
 		new Setting(containerEl)
 			.setName('对话后端')
-			.setDesc('CodeM（ACP 流式）或豆包 CLI（每轮单次调用）；切换立即生效（聊天框底部也有快捷切换 chip）')
+			.setDesc('CodeM（ACP 流式）/ 豆包 CLI / Claude Code（stream-json）；切换立即生效（聊天框底部也有快捷切换 chip）')
 			.addDropdown((dd) =>
 				dd
 					.addOption('codem', 'CodeM（ACP）')
 					.addOption('doubao', '豆包 CLI')
+					.addOption('claude', 'Claude Code')
 					.setValue(this.plugin.settings.backend)
 					.onChange(async (v) => {
-						this.plugin.settings.backend = v as 'codem' | 'doubao';
+						this.plugin.settings.backend = v as 'codem' | 'doubao' | 'claude';
 						await this.plugin.saveSettings();
 						// 切换立即生效：通知所有打开的聊天视图杀旧后端并按新后端重渲染（无需重开窗口）
 						for (const leaf of this.app.workspace.getLeavesOfType('codem-chat-view')) {
@@ -115,6 +122,19 @@ export class CodeMSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.doubaoCliPath)
 				.onChange(async (v) => {
 					this.plugin.settings.doubaoCliPath = v;
+					await this.plugin.saveSettings();
+				})
+		)
+
+		new Setting(containerEl)
+			.setName('Claude CLI 路径')
+			.setDesc('claude.cmd 或原生 claude.exe，留空自动探测（与 CodeM/豆包同 node 目录）；模型路由沿用 ~/.claude/settings.json（CC-Switch 管理），本插件不传 --model')
+			.addText((text) =>
+				text
+				.setPlaceholder('留空自动探测')
+				.setValue(this.plugin.settings.claudeCliPath)
+				.onChange(async (v) => {
+					this.plugin.settings.claudeCliPath = v;
 					await this.plugin.saveSettings();
 				})
 		);

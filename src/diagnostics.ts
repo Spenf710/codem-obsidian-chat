@@ -235,6 +235,16 @@ const ERROR_RULES: ErrorRule[] = [
 		'重试一次；反复出现请在终端执行 doubao --version 检查安装。',
 	],
 	[
+		/Claude 进程退出/i,
+		'Claude Code 进程异常退出',
+		'重试一次；反复出现请在终端执行 claude --version 检查安装（若报「与 Windows 版本不兼容」见知识库排障笔记跑 install.cjs）。',
+	],
+	[
+		/prompt is too long|context.{0,20}(exceed|超限|超长)|maximum.{0,10}context|上下文.{0,6}(超|长)/i,
+		'上下文超出模型窗口限制',
+		'当前模型上下文窗口有限（DeepSeek 路由约 128K）——请新开会话，或在 CC-Switch / settings.json 切换更大窗口模型。',
+	],
+	[
 		/进程退出|process exit|exit code|退出码/i,
 		'后端服务意外退出',
 		'重试一次；反复出现请展开「查看详情」并反馈给插件作者。',

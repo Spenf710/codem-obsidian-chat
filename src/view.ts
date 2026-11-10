@@ -5,6 +5,7 @@ import type CodeMChatPlugin from './main';
 import { AcpClient, runCodemHeadless, expandPath, type AcpOptions } from './acp-client';
 import type { AgentBackend } from './agent-backend';
 import { DoubaoBackend, defaultDoubaoExe } from './doubao-backend';
+import { ClaudeBackend, defaultClaudeCli } from './claude-backend';
 import { renderMarkdown } from './markdown';
 
 // —— v1.1.0 P1-2：跨视图会话占用注册表（模块级，所有视图实例共享）——
@@ -189,6 +190,7 @@ function sourceLabel(c: SessionCard): string {
 	if (c.source === 'app') return '客户端';
 	if (c.source === 'subagent') return '子代理';
 	if (c.source === 'doubao') return '豆包';
+	if (c.source === 'claude') return 'Claude';
 	if (!c.source && /Obsidian Vault/i.test(c.cwd)) return 'Obsidian插件';
 	return '本地';
 }
@@ -267,6 +269,8 @@ export class CodeMChatView extends ItemView {
 	private planBtn: HTMLButtonElement | null = null;
 	/** 模型 chip（S4：豆包独有 --model，CodeM 模式隐藏） */
 	private modelChipBtn: HTMLElement | null = null;
+	/** 智能强度 chip（CC 集成：Claude 无对应参数，模式隐藏） */
+	private intelligenceChipBtn: HTMLElement | null = null;
 	/** 信息行品牌标识（S4-fix）：✳ CodeM / ✳ 豆包，随切换同步 */
 	private agentBrandEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
@@ -522,12 +526,13 @@ export class CodeMChatView extends ItemView {
 		this.backendIconEl = backendInner.createSpan({ cls: 'codem-chat-chip-icon' });
 		this.backendLabelEl = backendInner.createSpan({ cls: 'codem-chat-chip-value' });
 		backendInner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
-		backendBtn.setAttribute('aria-label', '对话后端：CodeM（ACP）/ 豆包 CLI，点击切换');
+		backendBtn.setAttribute('aria-label', '对话后端：CodeM（ACP）/ 豆包 CLI / Claude Code，点击切换');
 		backendBtn.onclick = (e) => {
 			const menu = new Menu();
-			const items: Array<{ id: 'codem' | 'doubao'; title: string; icon: string }> = [
-				{ id: 'codem', title: 'CodeM（ACP 流式）', icon: 'message-square' },
-				{ id: 'doubao', title: '豆包 CLI（豆包工作）', icon: 'sparkles' },
+			const items: Array<{ id: 'codem' | 'doubao' | 'claude'; title: string; icon: string; notice: string }> = [
+				{ id: 'codem', title: 'CodeM（ACP 流式）', icon: 'message-square', notice: '已切换到 CodeM，新对话将走 CodeM' },
+				{ id: 'doubao', title: '豆包 CLI（豆包工作）', icon: 'sparkles', notice: '已切换到豆包 CLI，新对话将走豆包' },
+				{ id: 'claude', title: 'Claude Code（stream-json 流式）', icon: 'bot', notice: '已切换到 Claude Code，新对话将走 Claude（模型路由沿用 ~/.claude/settings.json）' },
 			];
 			for (const it of items) {
 					menu.addItem((mi) =>
@@ -537,10 +542,7 @@ export class CodeMChatView extends ItemView {
 								this.plugin.settings.backend = it.id;
 								await this.plugin.saveSettings();
 								this.switchBackend(); // 杀旧后端 + 清会话绑定 + 空状态重渲染 + chip 同步
-								new Notice(
-									it.id === 'doubao' ? '已切换到豆包 CLI，新对话将走豆包' : '已切换到 CodeM，新对话将走 CodeM',
-									3000
-								);
+								new Notice(it.notice, 3500);
 							})();
 						})
 					);
@@ -574,8 +576,8 @@ export class CodeMChatView extends ItemView {
 		};
 		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
 		// 智能强度 chip（v1.0.5 对齐原生命名）：label 语义紫蓝（叶部 --codem-accent）；
-		// CodeM 走 --intelligence；豆包同名直传 --effort（实测两者档位同集，含 xhigh），跟随配置=不传
-		this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v), 'gauge');
+		// CodeM 走 --intelligence；豆包同名直传 --effort（实测两者档位同集，含 xhigh）；Claude 无对应参数（CC 集成隐藏）
+		this.intelligenceChipBtn = this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v), 'gauge');
 		// 模型 chip（S4 豆包独有）：--model 指定模型，跟随=不传（CLI 默认 Auto）；
 		// 合法值实测挖出（invalid 探针报错回显）：9 个，含第三方模型；CodeM 模式隐藏（updateBackendChip 控显隐）
 		const DOUBAO_MODELS = [
@@ -748,7 +750,13 @@ export class CodeMChatView extends ItemView {
 
 	private renderEmpty(into?: HTMLElement): void {
 		const el = (into ?? this.msgContainer).createDiv({ cls: 'codem-chat-empty' });
-		el.setText(this.plugin.settings.backend === 'doubao' ? '正在检查豆包环境…' : '正在检查 CodeM 环境…');
+		el.setText(
+			this.plugin.settings.backend === 'doubao'
+				? '正在检查豆包环境…'
+				: this.plugin.settings.backend === 'claude'
+					? '正在检查 Claude 环境…'
+					: '正在检查 CodeM 环境…'
+		);
 		void this.renderEmptyContent(el);
 	}
 
@@ -834,6 +842,33 @@ export class CodeMChatView extends ItemView {
 				cls: 'codem-chat-empty-tip',
 				text: `在 PowerShell 执行：${DOUBAO_INSTALL_CMD}\n（或到豆包工作帮助中心搜索「豆包 CLI」了解详情）`,
 			});
+			return;
+		}
+		// —— Claude Code 后端（CC 集成）：存在性检查；模型路由/登录态在 ~/.claude/settings.json（CC-Switch 管理），不在此检 ——
+		if (this.plugin.settings.backend === 'claude') {
+			if (!el.isConnected) return;
+			el.empty();
+			const cli = expandPath(this.plugin.settings.claudeCliPath || defaultClaudeCli());
+			const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()];
+			if (fs.existsSync(cli)) {
+				el.createDiv({ cls: 'codem-chat-empty-icon', text: '✳' });
+				el.createDiv({ cls: 'codem-chat-empty-title', text: `${wd}好，Claude Code 已就绪` });
+				el.createDiv({
+					cls: 'codem-chat-empty-sub',
+					text: '你的笔记库就是 Claude Code 的工作目录。模型路由沿用 ~/.claude/settings.json（当前 DeepSeek 兼容层，上下文约 128K，长对话注意窗口）。',
+				});
+				el.createDiv({
+					cls: 'codem-chat-empty-tip',
+					text: '💡 流式输出（真打字机）· 权限切「完全访问」= 跳过权限确认 · @ 引用笔记',
+				});
+			} else {
+				el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
+				el.createDiv({ cls: 'codem-chat-empty-title', text: '未找到 Claude Code CLI' });
+				el.createDiv({
+					cls: 'codem-chat-empty-sub',
+					text: `未在 ${cli} 找到 claude CLI。请执行 npm install -g @anthropic-ai/claude-code；若报「与 Windows 版本不兼容」，运行 node <node目录>/node_modules/@anthropic-ai/claude-code/install.cjs 修复（见知识库排障笔记）。`,
+				});
+			}
 			return;
 		}
 		const status = await checkEnvironment(this.plugin.settings.codemCliPath, this.plugin.settings.nodePath);
@@ -1212,11 +1247,14 @@ export class CodeMChatView extends ItemView {
 
 	/** 停止按钮与输入框提示跟随当前 tab 执行状态（setStatusLight 是所有状态切换汇聚点）。
 	 *  v0.6.0：停止按钮常驻（叶部式），空闲为禁用态而非隐藏 */
-	/** 输入框占位符（S4-fix）：文案随 codem/doubao 后端切换 */
+	/** 输入框占位符（S4-fix）：文案随后端切换 */
 	private inputPlaceholder(): string {
-		return this.plugin.settings.backend === 'doubao'
+		const b = this.plugin.settings.backend;
+		return b === 'doubao'
 			? '询问豆包，/ 技能，@ 文件…（Enter 发送）'
-			: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）';
+			: b === 'claude'
+				? '询问 Claude，/ 技能，@ 文件…（Enter 发送）'
+				: '询问 CodeM，/ 技能，@ 文件…（Enter 发送）';
 	}
 
 	private syncStopUi(): void {
@@ -1316,9 +1354,9 @@ export class CodeMChatView extends ItemView {
 		this.permBtn.removeClass('is-manual', 'is-smart', 'is-yolo');
 		this.permBtn.addClass('is-' + mode);
 		this.permBtn.toggleClass('is-active', mode === 'yolo');
-		// S4：豆包模式——权限档位映射 --permission-mode 启动参数，切档后重建后端使下一轮生效；
-		// 复用 applyModelOpts（豆包 loadSession = 登记真 ID 映射，云端会话续聊不受影响）
-		if (this.plugin.settings.backend === 'doubao') this.applyModelOpts();
+		// S4/CC：非 CodeM 后端——权限档位映射启动参数（豆包 --permission-mode / Claude yolo→--dangerously-skip-permissions），
+		// 切档后重建后端使下一轮生效；复用 applyModelOpts（loadSession=登记真 ID 映射，会话续聊不受影响）
+		if (this.plugin.settings.backend !== 'codem') this.applyModelOpts();
 	}
 
 	/** 输入历史回溯：delta<0 上一条（从最近开始），delta>0 下一条，走到底恢复空输入 */
@@ -1387,16 +1425,19 @@ export class CodeMChatView extends ItemView {
 	 *  点击弹菜单选值，空串 = 跟随配置不传参 */
 	/** 后端 chip 同步（豆包集成 S4）：快捷切换/设置页切换后更新图标与文案 */
 	private updateBackendChip(): void {
-		const isDoubao = this.plugin.settings.backend === 'doubao';
-		this.backendLabelEl?.setText(isDoubao ? '豆包' : 'CodeM');
-		if (this.backendIconEl) setIcon(this.backendIconEl, isDoubao ? 'sparkles' : 'message-square');
-		// S4-fix：品牌标识与输入框占位符同步切换（左上角 ✳ CodeM → ✳ 豆包）
-		this.agentBrandEl?.setText(isDoubao ? '✳ 豆包' : '✳ CodeM');
+		const backend = this.plugin.settings.backend;
+		const isDoubao = backend === 'doubao';
+		const isClaude = backend === 'claude';
+		this.backendLabelEl?.setText(isDoubao ? '豆包' : isClaude ? 'Claude' : 'CodeM');
+		if (this.backendIconEl) setIcon(this.backendIconEl, isDoubao ? 'sparkles' : isClaude ? 'bot' : 'message-square');
+		// S4-fix：品牌标识与输入框占位符同步切换（左上角 ✳ CodeM → ✳ 豆包 / ✳ Claude）
+		this.agentBrandEl?.setText(isDoubao ? '✳ 豆包' : isClaude ? '✳ Claude' : '✳ CodeM');
 		if (this.inputEl && !this.activeTab.busy) this.inputEl.placeholder = this.inputPlaceholder();
-		// S4：Plan 为 CodeM 专属参数（--plan 只读模式），豆包无对应——按后端显隐；
-		// 模型 chip 相反：豆包独有 --model，CodeM 模式隐藏
-		this.planBtn?.toggleClass('codem-is-hidden', isDoubao);
+		// chip 按后端互斥显隐：Plan=CodeM 专属（--plan）；模型=豆包独有（--model）；
+		// 智能强度=CodeM(--intelligence)/豆包(--effort) 同名同集，Claude 无对应参数
+		this.planBtn?.toggleClass('codem-is-hidden', isDoubao || isClaude);
 		this.modelChipBtn?.toggleClass('codem-is-hidden', !isDoubao);
+		this.intelligenceChipBtn?.toggleClass('codem-is-hidden', isClaude);
 	}
 
 	private buildOptChip(
@@ -1459,11 +1500,11 @@ export class CodeMChatView extends ItemView {
 			this.restarting = false;
 			return;
 		}
-		// S4：豆包每轮新进程无需“重启”语义，文案区分；恢复逻辑通用（loadSession=登记真 ID 映射）
+		// S4/CC：豆包/Claude 每轮新进程无需“重启”语义，文案区分；恢复逻辑通用（loadSession=登记真 ID 映射）
 		new Notice(
-			this.plugin.settings.backend === 'doubao'
-				? '已更新豆包运行参数，下一轮对话生效'
-				: '已按新参数重启 CodeM 进程，正在恢复会话…',
+			this.plugin.settings.backend === 'codem'
+				? '已按新参数重启 CodeM 进程，正在恢复会话…'
+				: '已更新运行参数，下一轮对话生效',
 			3000
 		);
 		void (async () => {
@@ -1630,9 +1671,9 @@ export class CodeMChatView extends ItemView {
 			new Notice('会话执行中，等本轮结束再回滚');
 			return;
 		}
-		// 豆包后端（S3）：会话正文存云端，无本地 jsonl 快照可回滚
-		if (this.plugin.settings.backend === 'doubao') {
-			new Notice('豆包会话不支持本地快照回滚（历史正文存于云端）');
+		// 豆包/Claude 后端（S3/CC）：快照回滚走 ~/.codem jsonl，非 CodeM 会话无本地快照数据源
+		if (this.plugin.settings.backend !== 'codem') {
+			new Notice('当前后端会话不支持本地快照回滚（正文存于云端/CLI 侧）');
 			return;
 		}
 		const cards = await listCodemSessions();
@@ -1816,6 +1857,23 @@ export class CodeMChatView extends ItemView {
 				}
 			);
 			return this.client;
+		}
+		// —— Claude Code 后端（CC 集成）：每轮 spawn -p stream-json，无长驻连接 ——
+		if (this.plugin.settings.backend === 'claude') {
+		 const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
+		 // 权限映射：完全访问（yolo）→ --dangerously-skip-permissions；其余档走 CLI 默认。
+		 // 模型路由沿用 ~/.claude/settings.json（CC-Switch 管理），不传 --model
+		 this.client = new ClaudeBackend(
+		  {
+		   cliPath: expandPath(this.plugin.settings.claudeCliPath || defaultClaudeCli()),
+		   cwd,
+		   skipPermissions: this.permMode === 'yolo',
+		  },
+		  {
+		   onUpdate: (sid, u) => this.handleUpdate(sid, u),
+		  }
+		 );
+		 return this.client;
 		}
 		this.client = new AcpClient(
 			this.pluginOpts(),
@@ -2051,15 +2109,19 @@ export class CodeMChatView extends ItemView {
 			const reason = await client.prompt(tab.sessionId, blocks);
 			// 本轮已被 watchdog 强制收尾接管：丢弃迟到结果，不再渲染时间线/标题
 			if (seq !== tab.turnSeq) return;
-			// —— 豆包（S3）：占位 ID → 云端真 ID 同步 + 本地索引（历史面板数据源）——
-			if (this.plugin.settings.backend === 'doubao' && tab.sessionId) {
+			// —— 豆包/Claude（S3/CC）：占位 ID → 真 ID 同步 + 本地索引（历史面板数据源）——
+			if (this.plugin.settings.backend !== 'codem' && tab.sessionId) {
 				const realId = client.getRealSessionId(tab.sessionId);
 				if (realId && realId !== tab.sessionId) {
-					tab.sessionId = realId; // 后续轮 / 历史索引 / 持久化统一用云端真 ID
+					tab.sessionId = realId; // 后续轮 / 历史索引 / 持久化统一用真 ID
 					if (tab === this.activeTab) this.updateSidEl();
 				}
-				const prev = this.plugin.settings.doubaoSessions[tab.sessionId];
-				this.plugin.settings.doubaoSessions[tab.sessionId] = {
+				const store =
+					this.plugin.settings.backend === 'doubao'
+						? this.plugin.settings.doubaoSessions
+						: this.plugin.settings.claudeSessions;
+				const prev = store[tab.sessionId];
+				store[tab.sessionId] = {
 					firstPrompt: prev?.firstPrompt || rawPrompt.slice(0, 80),
 					userTurns: tab.turnCount,
 					lastTime: new Date().toISOString(),
@@ -2223,8 +2285,8 @@ export class CodeMChatView extends ItemView {
 	 * 依据首轮用户问题 + 助手回复摘要；结果持久化到 settings.sessionTitles。
 	 */
 	private async generateTitle(tab: ChatTab, userText: string): Promise<void> {
-		// 豆包后端：无头标题调用依赖 codem CLI，跳过（S3 泛化 headless 到豆包后补）
-		if (this.plugin.settings.backend === 'doubao') return;
+		// 豆包/Claude 后端：无头标题调用依赖 codem CLI，跳过（历史列表回退首问显示）
+		if (this.plugin.settings.backend !== 'codem') return;
 		try {
 			const reply = tab.mdBuffer.replace(/\s+/g, ' ').slice(0, 600);
 			const ask = userText.replace(/\s+/g, ' ').replace(/["'`]/g, ' ').slice(0, 200);
@@ -3219,16 +3281,23 @@ export class CodeMChatView extends ItemView {
 		this.histEl.empty();
 		this.histEl.createDiv({
 			cls: 'codem-hist-loading',
-			text: this.plugin.settings.backend === 'doubao' ? '读取豆包会话索引…' : '扫描 ~/.codem/sessions …',
+			text:
+				this.plugin.settings.backend === 'doubao'
+					? '读取豆包会话索引…'
+					: this.plugin.settings.backend === 'claude'
+						? '读取 Claude 会话索引…'
+						: '扫描 ~/.codem/sessions …',
 		});
 		this.histEl.show();
 		this.histOpen = true;
 		try {
-			// 豆包后端（S3）：历史面板读本地索引（云端会话不落盘）；CodeM 扫描 jsonl
+			// 豆包/Claude 后端（S3/CC）：历史面板读本地索引（会话正文不在 ~/.codem jsonl）；CodeM 扫描 jsonl
 			this.allCards =
 				this.plugin.settings.backend === 'doubao'
 					? doubaoSessionCards(this.plugin.settings.doubaoSessions ?? {})
-					: await listCodemSessions();
+					: this.plugin.settings.backend === 'claude'
+						? doubaoSessionCards(this.plugin.settings.claudeSessions ?? {}, 'claude')
+						: await listCodemSessions();
 		} catch (e) {
 			new Notice(`扫描历史会话失败：${e instanceof Error ? e.message : String(e)}`);
 			this.closeHistory();
@@ -3420,8 +3489,8 @@ export class CodeMChatView extends ItemView {
 		this.resetTurnNav();
 		tab.scrollEl.createDiv({ cls: 'codem-chat-empty', text: '载入历史会话…' });
 		try {
-			// 豆包卡片（S3）：无本地 jsonl，turns 为空——载入即 --resume 云端续聊
-			const turns = card.source === 'doubao' ? [] : await readCodemSessionTurns(card.filePath);
+			// 豆包/Claude 卡片（S3/CC）：不走 ~/.codem jsonl，turns 为空——载入即 --resume 续聊
+			const turns = card.source === 'doubao' || card.source === 'claude' ? [] : await readCodemSessionTurns(card.filePath);
 			const client = await this.ensureClient();
 			// cwd 必须传会话自己的原始 cwd（探针实测：会话按 cwd hash 隔离，传错目录报 does not exist）；
 			// 换会话前先释放本连接持有的旧会话（daemon 层 writer 占位会堵死旧会话下次 load）
@@ -3471,11 +3540,15 @@ export class CodeMChatView extends ItemView {
 				);
 			}
 			tab.scrollEl.empty();
-			// 豆包卡片（S3）：无本地正文可回显，提示云端续聊语义
-			if (card.source === 'doubao') {
+			// 豆包/Claude 卡片（S3/CC）：无本地正文可回显，提示续聊语义
+			if (card.source === 'doubao' || card.source === 'claude') {
 				tab.scrollEl
 					.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
-					.setText('☁ 已载入豆包会话（云端上下文已保留）——历史消息不本地回显，直接继续对话即可');
+					.setText(
+						card.source === 'claude'
+							? '☁ 已载入 Claude Code 会话（CLI 上下文已保留）——历史消息暂不回显，直接继续对话即可'
+							: '☁ 已载入豆包会话（云端上下文已保留）——历史消息不本地回显，直接继续对话即可'
+					);
 			}
 			// v1.0.4：tool_result 并入前一个 tool_use 卡片——结果跟卡片走（叶部/Claudian 同构），
 			// 消灭游离的裸奔「工具结果」行；跨用户消息不配对，配不上保留原样兜底
