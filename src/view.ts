@@ -609,6 +609,10 @@ export class CodeMChatView extends ItemView {
 			this.applyModelOpts();
 			new Notice(this.modelOpts.plan ? 'Plan 模式：只读不写，已按新参数重启 CodeM' : 'Plan 模式已关闭，已按新参数重启 CodeM', 3000);
 		};
+		// S6-fix：全部 chip 建完后统一按当前后端做首屏显隐初始化——
+		// 此前 updateBackendChip 在 backendBtn 后调用，彼时 Plan/模型 chip 尚未创建（?. 静默跳过），
+		// 首屏显隐不随 backend 调整：豆包模式 Plan 未隐藏、CodeM 模式模型 chip 未隐藏
+		this.updateBackendChip();
 		// v0.7.0（叶部式）：ctx-meter 上下文用量指示——按会话总字符量估算 token 占比
 		this.ctxMeterEl = chips.createSpan({ cls: 'codem-chat-ctx-text', text: '' });
 		this.ctxMeterEl.setAttribute('aria-label', '上下文窗口用量');
