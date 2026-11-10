@@ -42,6 +42,9 @@ import {
 	toTildePath,
 	friendlyError,
 	CODEM_INSTALL_CMD,
+	checkDoubaoEnvironment,
+	installDoubaoCli,
+	DOUBAO_INSTALL_CMD,
 } from './diagnostics';
 
 export const VIEW_TYPE_CODEM_CHAT = 'codem-chat-view';
@@ -741,33 +744,92 @@ export class CodeMChatView extends ItemView {
 
 	private renderEmpty(into?: HTMLElement): void {
 		const el = (into ?? this.msgContainer).createDiv({ cls: 'codem-chat-empty' });
-		el.setText('正在检查 CodeM 环境…');
+		el.setText(this.plugin.settings.backend === 'doubao' ? '正在检查豆包环境…' : '正在检查 CodeM 环境…');
 		void this.renderEmptyContent(el);
 	}
 
 	/** 空状态内容（异步）：按环境检测结果渲染引导或欢迎页 */
 	private async renderEmptyContent(el: HTMLElement): Promise<void> {
-		// —— 豆包后端（豆包集成 S2）：环境检查只看 doubao.exe 存在性（auth 检查 S4 接入）——
+		// —— 豆包后端（S4 升级）：自检走 checkDoubaoEnvironment（存在性+版本+登录态），未装一键安装 ——
 		if (this.plugin.settings.backend === 'doubao') {
-			if (!el.isConnected) return;
+			const status = await checkDoubaoEnvironment(
+				this.plugin.settings.doubaoCliPath,
+				this.plugin.settings.nodePath
+			);
+			if (!el.isConnected) return; // 检测期间用户已开始对话
+			// 竞态防护（局部变量绕 TS 窄化）：检测期间切回 CodeM → 重路由到对应分支
+			const backendNow: string = this.plugin.settings.backend;
+			if (backendNow !== 'doubao') return void this.renderEmptyContent(el);
 			el.empty();
-			const exe = expandPath(this.plugin.settings.doubaoCliPath || defaultDoubaoExe());
-			if (fs.existsSync(exe)) {
-				const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()];
+			const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()];
+			if (status.state === 'ready') {
 				el.createDiv({ cls: 'codem-chat-empty-icon', text: '✳' });
 				el.createDiv({ cls: 'codem-chat-empty-title', text: `${wd}好，豆包已就绪` });
 				el.createDiv({
 					cls: 'codem-chat-empty-sub',
-					text: '你的笔记库就是豆包的工作目录，直接开始提问吧。',
+					text: `你的笔记库就是豆包的工作目录，直接开始提问吧。（v${status.version}）`,
 				});
-			} else {
-				el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
-				el.createDiv({ cls: 'codem-chat-empty-title', text: '未找到豆包 CLI' });
+				el.createDiv({
+					cls: 'codem-chat-empty-tip',
+					text: '💡 可直接粘贴截图提问 · 输入 @ 引用笔记 · 底部 chip 可切模型/权限/智能强度',
+				});
+				return;
+			}
+			if (status.state === 'no-login') {
+				el.createDiv({ cls: 'codem-chat-empty-icon', text: '🔐' });
+				el.createDiv({ cls: 'codem-chat-empty-title', text: '豆包 CLI 已安装，但还未登录' });
 				el.createDiv({
 					cls: 'codem-chat-empty-sub',
-					text: `未在 ${exe} 找到 doubao.exe。请先执行 npm install -g @bytedance/doubao-cli 并完成登录，或在插件设置中填写 doubao.exe 路径。`,
+					text: '在终端执行 doubao login，用豆包或飞书 App 扫码授权（需豆包团队/企业订阅）；完成后回到这里即可开始。',
 				});
+				const retry = el.createDiv({ cls: 'codem-chat-empty-samples' });
+				retry.createEl('button', { cls: 'codem-chat-sample', text: '我已登录，重新检查' }).onclick =
+					() => void this.refreshEnvironment();
+				return;
 			}
+			if (status.state === 'no-npm') {
+				el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
+				el.createDiv({ cls: 'codem-chat-empty-title', text: '缺少 Node.js / npm 运行环境' });
+				el.createDiv({
+					cls: 'codem-chat-empty-sub',
+					text: '已找到豆包 CLI，但一键安装/升级还需要 npm。请到 nodejs.org 安装 Node.js 18+ 后重启 Obsidian。',
+				});
+				return;
+			}
+			// missing：一键安装（官方 npm 命令）
+			el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
+			el.createDiv({ cls: 'codem-chat-empty-title', text: '开始之前，先安装豆包 CLI' });
+			el.createDiv({
+				cls: 'codem-chat-empty-sub',
+				text: '豆包 CLI 是豆包工作的终端入口（npm 官方包）。点击下方按钮自动完成安装（需联网，约 1-3 分钟，安装脚本会下载原生程序）。',
+			});
+			const actions = el.createDiv({ cls: 'codem-chat-empty-samples' });
+			const installBtn = actions.createEl('button', { cls: 'codem-chat-sample is-cta', text: '一键安装豆包 CLI' });
+			installBtn.onclick = () => {
+				if (installBtn.dataset.installing) return;
+				installBtn.dataset.installing = '1';
+				installBtn.textContent = '正在安装…';
+				installDoubaoCli((p) => {
+					if (!p.done) {
+						if (p.line) installBtn.textContent = `正在安装… ${p.line.slice(0, 40)}`;
+						return;
+					}
+					delete installBtn.dataset.installing;
+					if (p.code === 0) {
+						new Notice('豆包 CLI 安装完成！请在终端执行 doubao login 扫码登录后再回来。', 10000);
+					} else {
+						installBtn.textContent = '安装未成功，点击重试';
+						new Notice(`豆包 CLI 安装失败（退出码 ${p.code}）。可重试，或到插件设置手动安装。`, 10000);
+					}
+					void this.refreshEnvironment();
+				});
+			};
+			const manual = el.createEl('details', { cls: 'codem-chat-empty-manual' });
+			manual.createEl('summary', { text: '无法自动安装？手动方式' });
+			manual.createDiv({
+				cls: 'codem-chat-empty-tip',
+				text: `在 PowerShell 执行：${DOUBAO_INSTALL_CMD}\n（或到豆包工作帮助中心搜索「豆包 CLI」了解详情）`,
+			});
 			return;
 		}
 		const status = await checkEnvironment(this.plugin.settings.codemCliPath, this.plugin.settings.nodePath);

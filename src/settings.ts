@@ -8,7 +8,11 @@ import {
 	toTildePath,
 	CODEM_INSTALL_CMD,
 	abbreviateHome,
+	checkDoubaoEnvironment,
+	installDoubaoCli,
+	DOUBAO_INSTALL_CMD,
 	type EnvStatus,
+	type DoubaoEnvStatus,
 } from './diagnostics';
 import type { DoubaoSessionMeta } from './codem-sessions';
 
@@ -70,6 +74,8 @@ export class CodeMSettingTab extends PluginSettingTab {
 	plugin: CodeMChatPlugin;
 	private envStatus: EnvStatus | null = null;
 	private installing = false;
+	private doubaoInstalling = false;
+	private doubaoEnvStatus: DoubaoEnvStatus | null = null;
 
 	constructor(app: App, plugin: CodeMChatPlugin) {
 		super(app, plugin);
@@ -112,6 +118,10 @@ export class CodeMSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 		);
+
+		// —— 豆包环境（S4 尾巴：自检 + npm 一键安装）——
+		const doubaoEnvSetting = new Setting(containerEl).setName('豆包环境');
+		this.refreshDoubaoEnv(doubaoEnvSetting);
 
 		// —— CodeM 环境（自检 + 一键安装）——
 		const envSetting = new Setting(containerEl).setName('CodeM 环境');
@@ -317,6 +327,72 @@ export class CodeMSettingTab extends PluginSettingTab {
 		});
 		// 安装期间离开设置页：Setting 引用随 DOM 释放，进度回调写入已分离节点不报错，结果照常经 Notice 提示
 		void stop;
+	}
+
+	/** 豆包环境自检并刷新「豆包环境」区块（S4：版本 + 登录态 + 一键安装） */
+	private async refreshDoubaoEnv(envSetting: Setting): Promise<void> {
+		if (this.doubaoInstalling) return;
+		envSetting.controlEl.querySelectorAll('button').forEach((b) => b.remove());
+		envSetting.setDesc('正在检查豆包 CLI 安装与登录状态…');
+		const status = await checkDoubaoEnvironment(
+			this.plugin.settings.doubaoCliPath,
+			this.plugin.settings.nodePath
+		);
+		this.doubaoEnvStatus = status;
+		envSetting.controlEl.querySelectorAll('button').forEach((b) => b.remove());
+		if (status.state === 'ready') {
+			envSetting.setDesc(`已就绪（版本 ${status.version}）· 已登录 · ${abbreviateHome(status.cliPath)}`);
+		} else if (status.state === 'no-login') {
+			envSetting.setDesc(
+				`已安装（版本 ${status.version}）但未登录——在终端执行 doubao login，用豆包或飞书 App 扫码（需团队/企业订阅）`
+			);
+		} else if (status.state === 'no-npm') {
+			envSetting.setDesc('已找到豆包 CLI，但缺少 npm（Node.js）——一键安装/升级不可用，请先安装 Node.js 18+');
+		} else {
+			envSetting.setDesc(
+				'尚未检测到豆包 CLI。点击「安装豆包 CLI」执行官方 npm 安装（需联网，约 1-3 分钟；安装脚本会下载原生程序）'
+			);
+			envSetting.addButton((btn) =>
+					btn.setButtonText('安装豆包 CLI').setCta().onClick(() => this.startDoubaoInstall(envSetting))
+			);
+		}
+		envSetting.addButton((btn) =>
+			btn.setButtonText('重新检查').onClick(() => void this.refreshDoubaoEnv(envSetting))
+		);
+	}
+
+	/** 一键安装豆包 CLI（官方 npm 命令）：进度实时回显，结束后自检刷新并通知聊天视图重渲染空状态 */
+	private startDoubaoInstall(envSetting: Setting): void {
+		if (this.doubaoInstalling) return;
+		this.doubaoInstalling = true;
+		envSetting.controlEl.querySelectorAll('button').forEach((b) => b.remove());
+		new Notice('开始安装豆包 CLI（npm 安装 + 下载原生程序），请保持网络畅通…', 8000);
+		envSetting.setDesc('正在安装豆包 CLI…');
+		installDoubaoCli((p) => {
+			if (!p.done) {
+				if (p.line) envSetting.setDesc(`正在安装豆包 CLI… ${p.line.slice(0, 80)}`);
+				return;
+			}
+			this.doubaoInstalling = false;
+			if (p.code === 0) {
+				new Notice('豆包 CLI 安装完成！可在终端执行 doubao login 扫码登录后使用。', 10000);
+				void this.refreshDoubaoEnv(envSetting);
+				// 已打开的聊天视图同步刷新豆包空状态
+				for (const leaf of this.app.workspace.getLeavesOfType('codem-chat-view')) {
+					const view = leaf.view as { refreshEnvironment?: () => void } | undefined;
+					view?.refreshEnvironment?.();
+				}
+			} else {
+				envSetting.setDesc(`安装未完成（退出码 ${p.code}）。可重试；或手动执行：${DOUBAO_INSTALL_CMD}`);
+				envSetting.addButton((btn) =>
+					btn.setButtonText('重试安装').setCta().onClick(() => this.startDoubaoInstall(envSetting))
+			);
+				envSetting.addButton((btn) =>
+					btn.setButtonText('我已手动安装，重新检查').onClick(() => void this.refreshDoubaoEnv(envSetting))
+			);
+				new Notice('豆包 CLI 安装失败，可在设置页重试或手动安装。', 10000);
+			}
+		});
 	}
 
 	private clearEnvButtons(envSetting: Setting): void {

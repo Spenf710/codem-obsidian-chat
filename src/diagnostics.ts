@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { expandPath, findNodeDir } from './acp-client';
+import { defaultDoubaoExe } from './doubao-backend';
 
 /** CodeM 官方 Windows 一键安装（PowerShell） */
 export const CODEM_INSTALL_CMD =
@@ -170,8 +171,8 @@ type ErrorRule = [RegExp, string, string];
 const ERROR_RULES: ErrorRule[] = [
 	[
 		/enoent|无法将.*codem|不是内部或外部命令|is not recognized|cannot find the path.*codem|find.*codem\.cmd/i,
-		'还没有安装 CodeM',
-		'打开本插件设置页，点击「安装 CodeM」；或在 PowerShell 执行官方一键安装命令。',
+		'CLI 未安装或路径不对',
+		'到本插件设置页检查「CodeM CLI 路径 / 豆包 CLI 路径」，或点击对应的一键安装按钮。',
 	],
 	[
 		/node\.js not found|node is not recognized|'node' 不是内部|cannot find module node|no such file or directory.*node/i,
@@ -189,9 +190,24 @@ const ERROR_RULES: ErrorRule[] = [
 		'CodeM 更新或重启后旧对话会失效，请新建对话；历史内容仍可在「历史会话」中回看。',
 	],
 	[
+		/internal_error: 无法启动主任务/i,
+		'豆包服务暂时不可用',
+		'稍后重试；反复出现请在终端执行 doubao update 升级 CLI，或向豆包官方反馈。',
+	],
+	[
+		/Unsupported --model value|--effort must be one of|invalid_arguments/i,
+		'豆包参数不被当前版本支持',
+		'该模型/档位与已安装的豆包 CLI 版本不符，请换一档或执行 doubao update 升级。',
+	],
+	[
+		/请先完成登录|豆包.*未登录|not logged in.*doubao/i,
+		'豆包尚未登录或登录已过期',
+		'在终端执行 doubao login，用豆包或飞书 App 扫码登录（需团队/企业订阅）。',
+	],
+	[
 		/not logged in|unauthorized|401|login required|请先登录/i,
-		'CodeM 尚未登录或登录已过期',
-		'在终端执行 codem login，用飞书扫码重新登录。',
+		'尚未登录或登录已过期',
+		'在终端执行 codem login 或 doubao login，扫码重新登录。',
 	],
 	[
 		/econnrefused|etimedout|enotfound|getaddrinfo|econnreset|socket hang up|network error|fetch failed/i,
@@ -214,8 +230,13 @@ const ERROR_RULES: ErrorRule[] = [
 		'任务较长时会自动继续；若长时间无响应，检查网络后重试。',
 	],
 	[
+		/豆包进程退出/i,
+		'豆包 CLI 进程异常退出',
+		'重试一次；反复出现请在终端执行 doubao --version 检查安装。',
+	],
+	[
 		/进程退出|process exit|exit code|退出码/i,
-		'CodeM 服务意外退出',
+		'后端服务意外退出',
 		'重试一次；反复出现请展开「查看详情」并反馈给插件作者。',
 	],
 ];
@@ -231,4 +252,130 @@ export function friendlyError(detail: string): FriendlyError {
 export function abbreviateHome(p: string): string {
 	const home = os.homedir();
 	return p.startsWith(home) ? '~' + p.slice(home.length) : p;
+}
+
+// ===== 豆包 CLI 环境（S4 尾巴：官方安装命令集成进插件，2026-11-10）=====
+
+/** 豆包官方 npm 安装命令（前置 Node 18+；postinstall 下载平台原生二进制，需允许 npm 安装脚本） */
+export const DOUBAO_INSTALL_CMD =
+	"npm install -g '@bytedance/doubao-cli' --registry=https://registry.npmjs.org/";
+
+/** 豆包环境状态：missing=未装；no-npm=缺 npm 装不了；no-login=已装未登录；ready=就绪 */
+export interface DoubaoEnvStatus {
+	state: 'missing' | 'no-npm' | 'no-login' | 'ready';
+	/** doubao.exe 路径（配置或默认探测） */
+	cliPath: string;
+	/** doubao --version 首行 */
+	version?: string;
+	/** auth status --verify 输出摘要（排障展示） */
+	authOutput?: string;
+}
+
+/** 子进程捕获（cmd /c 包装 + PATH 兑底，与 runCodemVersion 同款环境组装），供豆包版本/登录探测 */
+function captureOutput(
+	exe: string,
+	args: string[],
+	nodePath: string | undefined,
+	timeoutMs: number
+): Promise<{ code: number | null; out: string; err: string }> {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	const nodeDir = findNodeDir(nodePath);
+	const sysDirs = ['C:\\Windows\\System32', 'C:\\Windows'];
+	if (nodeDir) sysDirs.push(nodeDir);
+	env.PATH = [...sysDirs, env.PATH ?? ''].join(path.delimiter);
+	const comspec = env.ComSpec && fs.existsSync(env.ComSpec) ? env.ComSpec : 'C:\\Windows\\System32\\cmd.exe';
+	return new Promise((resolve) => {
+		const child = spawn(comspec, ['/c', exe, ...args], { windowsHide: true, env });
+		let out = '';
+		let err = '';
+		let done = false;
+		const finish = (r: { code: number | null; out: string; err: string }): void => {
+			if (!done) {
+				done = true;
+				resolve(r);
+			}
+		};
+		const timer = window.setTimeout(() => {
+			try {
+				child.kill();
+			} catch {
+				/* 已退出 */
+			}
+			finish({ code: null, out, err });
+		}, timeoutMs);
+		child.stdout?.on('data', (c: Buffer) => (out += c.toString('utf8')));
+		child.stderr?.on('data', (c: Buffer) => (err += c.toString('utf8')));
+		child.on('error', (e) => {
+			window.clearTimeout(timer);
+			err += e.message;
+			finish({ code: -1, out, err });
+		});
+		child.on('close', (code) => {
+			window.clearTimeout(timer);
+			finish({ code, out, err });
+		});
+	});
+}
+
+/**
+ * 豆包环境自检：exe 存在性（配置 → 默认位置）→ npm 可用性（安装/升级通道）→ 版本 → 登录态。
+ * 设置页「豆包环境」区块与聊天空状态共用同一结论；登录实测输出含「登录成功，账号已通过验证」。
+ */
+export async function checkDoubaoEnvironment(cliPathSetting: string, nodePath?: string): Promise<DoubaoEnvStatus> {
+	const exe = expandPath(cliPathSetting || defaultDoubaoExe());
+	if (!fs.existsSync(exe)) {
+		return { state: 'missing', cliPath: exe };
+	}
+	const nodeDir = findNodeDir(nodePath);
+	if (!nodeDir || !fs.existsSync(path.join(nodeDir, 'npm.cmd'))) {
+		return { state: 'no-npm', cliPath: exe };
+	}
+	const ver = await captureOutput(exe, ['--version'], nodePath, 15000);
+	const version = ver.out.split('\n').map((s) => s.trim()).find(Boolean) || '未知版本';
+	const auth = await captureOutput(exe, ['auth', 'status', '--verify'], nodePath, 30000);
+	const authText = (auth.out + '\n' + auth.err).trim();
+	const logged = auth.code === 0 && /登录成功|已通过验证/.test(authText);
+	return {
+		state: logged ? 'ready' : 'no-login',
+		cliPath: exe,
+		version,
+		authOutput: authText.slice(0, 200),
+	};
+}
+
+/**
+ * 一键安装豆包 CLI：spawn cmd /c npm install -g（官方命令，需允许 npm 安装脚本）。
+ * npm.cmd 经 cmd 启动；findNodeDir 探测不到 npm 时 spawn 会报错并经 onProgress 回传。
+ */
+export function installDoubaoCli(onProgress: (p: InstallProgress) => void): () => void {
+	const nodeDir = findNodeDir(undefined);
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	const sysDirs = ['C:\\Windows\\System32', 'C:\\Windows'];
+	if (nodeDir) sysDirs.push(nodeDir);
+	env.PATH = [...sysDirs, env.PATH ?? ''].join(path.delimiter);
+	const comspec = env.ComSpec && fs.existsSync(env.ComSpec) ? env.ComSpec : 'C:\\Windows\\System32\\cmd.exe';
+	const npmCmd =
+		nodeDir && fs.existsSync(path.join(nodeDir, 'npm.cmd')) ? path.join(nodeDir, 'npm.cmd') : 'npm.cmd';
+	const child: ChildProcess = spawn(
+		comspec,
+		['/c', npmCmd, 'install', '-g', '@bytedance/doubao-cli', '--registry=https://registry.npmjs.org/'],
+		{ windowsHide: true, env }
+	);
+	const pump = (buf: Buffer): void => {
+		for (const line of buf.toString('utf8').split('\n')) {
+			const t = line.trim();
+			if (t) onProgress({ line: t, done: false, code: null });
+		}
+	};
+	child.stdout?.on('data', pump);
+	child.stderr?.on('data', pump);
+	child.on('error', (e) => onProgress({ line: e.message, done: true, code: -1 }));
+	child.on('close', (code) => onProgress({ line: '', done: true, code: code ?? -1 }));
+	return () => {
+		try {
+			child.kill();
+		} catch {
+			/* 自然结束 */
+		}
+	};
 }
