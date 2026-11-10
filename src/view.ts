@@ -5,7 +5,7 @@ import type CodeMChatPlugin from './main';
 import { AcpClient, runCodemHeadless, expandPath, type AcpOptions } from './acp-client';
 import type { AgentBackend } from './agent-backend';
 import { DoubaoBackend, defaultDoubaoExe } from './doubao-backend';
-import { ClaudeBackend, defaultClaudeCli } from './claude-backend';
+import { ClaudeBackend, defaultClaudeCli, claudeModelNames } from './claude-backend';
 import { renderMarkdown } from './markdown';
 
 // —— v1.1.0 P1-2：跨视图会话占用注册表（模块级，所有视图实例共享）——
@@ -31,6 +31,7 @@ import {
 	readCodemSessionTurns,
 	listCodemSkills,
 	doubaoSessionCards,
+	claudeSessionCards,
 	type SessionCard,
 	type SkillInfo,
 	type Turn,
@@ -600,10 +601,10 @@ export class CodeMChatView extends ItemView {
 		this.modelChipBtn = this.buildOptChip(
 			chips, '模型', 'codem-chat-model', DOUBAO_MODELS, () => this.modelOpts.model, (v) => (this.modelOpts.model = v), 'cpu'
 		);
-		// Claude 模型 chip（CC-fix）：--model 档位 alias（轻量/标准/旗舰，经 settings.json 映射实际模型）；
-		// 与豆包模型 chip 互斥显隐（updateBackendChip），值集与存储独立
+		// Claude 模型 chip（CC2）：菜单直接显示当前可调用的真实模型名（读 ~/.claude/settings.json 的
+		// CC-Switch 映射，如 deepseek-flash）；存储值仍为档位 alias（--model 传参，经 settings.json 路由）
 		this.claudeModelChipBtn = this.buildOptChip(
-			chips, '模型', 'codem-chat-model', ['haiku', 'sonnet', 'opus'], () => this.modelOpts.claudeModel, (v) => (this.modelOpts.claudeModel = v), 'cpu'
+			chips, '模型', 'codem-chat-model', ['haiku', 'sonnet', 'opus'], () => this.modelOpts.claudeModel, (v) => (this.modelOpts.claudeModel = v), 'cpu', claudeModelNames()
 		);
 		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
@@ -1458,8 +1459,11 @@ export class CodeMChatView extends ItemView {
 		values: string[],
 		get: () => string,
 		set: (v: string) => void,
-		icon?: string
+		icon?: string,
+		/** CC2：可选显示名覆盖（存储值仍为原值）——Claude 模型 chip 用真实模型名替换档位 alias 展示 */
+		labels?: Record<string, string>
 	): HTMLElement {
+		const nameOf = (v: string): string => labels?.[v] ?? OPT_LABELS[v] ?? v;
 		const btn = host.createEl('button', { cls: 'codem-chat-chip ' + kindCls, attr: { type: 'button' } });
 		const inner = btn.createSpan({ cls: 'codem-chat-chip-inner' });
 		// v1.0.9 BUG-1：可选 SVG 图标——与权限 chip 同款 14px 图标，消除有无图标造成的基线高度差
@@ -1468,7 +1472,8 @@ export class CodeMChatView extends ItemView {
 			setIcon(iconEl, icon);
 		}
 		inner.createSpan({ cls: 'codem-chat-chip-label', text: label });
-		const valEl = inner.createSpan({ cls: 'codem-chat-chip-value', text: OPT_LABELS[''] ?? '跟随' });
+		// CC2：初始值展示同步（此前恒显“跟随”，选过值后重开视图不回显）
+		const valEl = inner.createSpan({ cls: 'codem-chat-chip-value', text: nameOf(get()) });
 		inner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
 		btn.onclick = (e) => {
 			const menu = new Menu();
@@ -1482,9 +1487,9 @@ export class CodeMChatView extends ItemView {
 			);
 			for (const v of values) {
 				menu.addItem((mi) =>
-					mi.setTitle(OPT_LABELS[v] ?? v).setChecked(get() === v).onClick(() => {
+					mi.setTitle(nameOf(v)).setChecked(get() === v).onClick(() => {
 						set(v);
-						valEl.setText(OPT_LABELS[v] ?? v);
+						valEl.setText(nameOf(v));
 						this.applyModelOpts();
 					})
 				);
@@ -3300,18 +3305,18 @@ export class CodeMChatView extends ItemView {
 				this.plugin.settings.backend === 'doubao'
 					? '读取豆包会话索引…'
 					: this.plugin.settings.backend === 'claude'
-						? '读取 Claude 会话索引…'
+						? '扫描 ~/.claude/projects 全量会话…'
 						: '扫描 ~/.codem/sessions …',
 		});
 		this.histEl.show();
 		this.histOpen = true;
 		try {
-			// 豆包/Claude 后端（S3/CC）：历史面板读本地索引（会话正文不在 ~/.codem jsonl）；CodeM 扫描 jsonl
+			// 豆包（S3）：本地索引；Claude（CC2）：扫 ~/.claude/projects 全量会话 jsonl（含终端/其他入口产生），插件索引作合并兑底；CodeM 扫 jsonl
 			this.allCards =
 				this.plugin.settings.backend === 'doubao'
 					? doubaoSessionCards(this.plugin.settings.doubaoSessions ?? {})
 					: this.plugin.settings.backend === 'claude'
-						? doubaoSessionCards(this.plugin.settings.claudeSessions ?? {}, 'claude')
+						? await claudeSessionCards(this.plugin.settings.claudeSessions ?? {})
 						: await listCodemSessions();
 		} catch (e) {
 			new Notice(`扫描历史会话失败：${e instanceof Error ? e.message : String(e)}`);

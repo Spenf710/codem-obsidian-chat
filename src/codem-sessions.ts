@@ -430,3 +430,107 @@ export function doubaoSessionCards(store: Record<string, DoubaoSessionMeta>, sou
 		}))
 		.sort((a, b) => (b.lastTime || '').localeCompare(a.lastTime || ''));
 }
+
+// ===== Claude 会话全量扫描（CC2：~/.claude/projects 本地落盘，历史面板数据源，2026-11-10）=====
+
+/**
+ * 扫描 ~/.claude/projects 下全部 Claude Code 会话（按 cwd 分目录的 <uuid>.jsonl）→ 历史面板卡片。
+ * 实测结构：首行 queue-operation{operation:'enqueue',content=用户原文,timestamp}；User/assistant 行含 cwd；
+ * 会话 ID 即文件名，--resume 跨进程续聊同口径。插件本地索引作合并兜底（磁盘被清理的记录仍可见）。
+ */
+export async function claudeSessionCards(extra: Record<string, DoubaoSessionMeta> = {}): Promise<SessionCard[]> {
+	const root = path.join(os.homedir(), '.claude', 'projects');
+	const files: string[] = [];
+	try {
+		for (const d of await fs.promises.readdir(root)) {
+			const dir = path.join(root, d);
+			try {
+				if (!(await fs.promises.stat(dir)).isDirectory()) continue;
+				for (const f of await fs.promises.readdir(dir)) {
+					if (f.endsWith('.jsonl')) files.push(path.join(dir, f));
+				}
+			} catch {
+				continue;
+			}
+		}
+	} catch {
+		return [];
+	}
+	const cards: SessionCard[] = [];
+	for (const filePath of files) {
+		const sessionId = path.basename(filePath).replace(/\.jsonl$/, '');
+		let firstPrompt = '';
+		let cwd = '';
+		try {
+			// 快扫文件头 64KB（首问 + cwd 必在其中），同 codem buildCard 性能策略
+			const fh = await fs.promises.open(filePath, 'r');
+			const buf = Buffer.alloc(65536);
+			const { bytesRead } = await fh.read(buf, 0, 65536, 0);
+			await fh.close();
+			const text = buf.toString('utf8', 0, bytesRead);
+			for (const line of text.split('\n')) {
+				if (firstPrompt && cwd) break;
+				if (!line.trim()) continue;
+				let obj: Record<string, unknown>;
+				try {
+					obj = JSON.parse(line);
+				} catch {
+					continue;
+				}
+				if (!cwd && typeof obj.cwd === 'string') cwd = obj.cwd;
+				if (firstPrompt) continue;
+				if (obj.type === 'queue-operation' && obj.operation === 'enqueue' && typeof obj.content === 'string') {
+					firstPrompt = obj.content;
+				} else if (obj.type === 'User') {
+					// 兜底：无 queue-operation 的会话取 User 行；跳过系统注入（CLAUDE.md 指令/命令包裹）
+					const msg = obj.message as { content?: unknown } | undefined;
+					const c = msg?.content;
+					const t =
+						typeof c === 'string'
+							? c
+							: Array.isArray(c)
+								? c.map((b) => (typeof b === 'string' ? b : ((b as { text?: string })?.text ?? ''))).join('')
+								: '';
+					if (t && !t.startsWith('<')) firstPrompt = t;
+				}
+			}
+		} catch {
+			continue;
+		}
+		if (!firstPrompt) continue; // 空会话不进列表
+		let st: fs.Stats;
+		try {
+			st = await fs.promises.stat(filePath);
+		} catch {
+			continue;
+		}
+		cards.push({
+			sessionId,
+			filePath,
+			firstPrompt: firstPrompt.replace(/\s+/g, ' ').slice(0, 80),
+			startTime: '',
+			lastTime: new Date(st.mtimeMs).toISOString(),
+			userTurns: 0,
+			toolCalls: 0,
+			cwd,
+			source: 'claude',
+		});
+	}
+	// 插件本地索引合并兜底：磁盘文件被清理/归档的会话记录仍可列出
+	for (const [id, m] of Object.entries(extra ?? {})) {
+		if (!id || !m?.firstPrompt || cards.some((c) => c.sessionId === id)) continue;
+		cards.push({
+			sessionId: id,
+			filePath: '',
+			firstPrompt: m.firstPrompt.slice(0, 80),
+			startTime: '',
+			lastTime: m.lastTime || '',
+			userTurns: m.userTurns ?? 0,
+			toolCalls: 0,
+			cwd: m.cwd ?? '',
+			source: 'claude',
+		});
+	}
+	cards.sort((a, b) => (b.lastTime || '').localeCompare(a.lastTime || ''));
+	return cards;
+}

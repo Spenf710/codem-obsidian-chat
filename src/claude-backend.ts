@@ -55,6 +55,25 @@ export function defaultClaudeCli(): string {
 	return path.join('C:\\ProgramData\\node-v24.15.0-win-x64', 'claude.cmd');
 }
 
+/**
+ * 读取 ~/.claude/settings.json 的档位→真实模型名映射（CC-Switch 管理 env）。
+ * CC2：模型 chip 菜单直接显示当前可调用的真实模型名（如 deepseek-flash），而非抽象档位名。
+ */
+export function claudeModelNames(): Record<string, string> {
+	try {
+		const p = path.join(os.homedir(), '.claude', 'settings.json');
+		const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { env?: Record<string, string> };
+		const env = raw.env ?? {};
+		return {
+			haiku: env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME || env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '轻量档',
+			sonnet: env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME || env.ANTHROPIC_DEFAULT_SONNET_MODEL || '标准档',
+			opus: env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME || env.ANTHROPIC_DEFAULT_OPUS_MODEL || '旗舰档',
+		};
+	} catch {
+		return { haiku: '轻量档', sonnet: '标准档', opus: '旗舰档' };
+	}
+}
+
 export class ClaudeBackend implements AgentBackend {
 	readonly name = 'claude';
 	readonly capabilities: AgentBackendCapabilities = {
