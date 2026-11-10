@@ -4581,3 +4581,11 @@ button.codem-chat-hist-archbtn:hover {
 	gap: 8px;
 	margin-top: 12px;
 }
+
+/* CC-fix：设置页分区标题（驾驶舱设计语言 emoji 分组）——分隔线 + 上间距强调分组 */
+.codem-chat-settings-page .setting-item-heading {
+	margin-top: 22px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+	font-weight: 700;
+}

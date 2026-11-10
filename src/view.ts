@@ -179,6 +179,9 @@ const OPT_LABELS: Record<string, string> = {
 	'xhigh': '超高',
 	'minimal': '极简',
 	'max': '最大',
+	'haiku': '轻量',
+	'sonnet': '标准',
+	'opus': '旗舰',
 };
 
 /** v1.0.14：会话来源显示——jsonl header 的 session_source 四值精确映射；
@@ -269,7 +272,9 @@ export class CodeMChatView extends ItemView {
 	private planBtn: HTMLButtonElement | null = null;
 	/** 模型 chip（S4：豆包独有 --model，CodeM 模式隐藏） */
 	private modelChipBtn: HTMLElement | null = null;
-	/** 智能强度 chip（CC 集成：Claude 无对应参数，模式隐藏） */
+	/** Claude 模型 chip（CC-fix：--model 档位 alias，与豆包模型 chip 互斥显隐） */
+	private claudeModelChipBtn: HTMLElement | null = null;
+	/** 智能强度 chip（CC-fix：Claude 映射思考预算，三后端常显） */
 	private intelligenceChipBtn: HTMLElement | null = null;
 	/** 信息行品牌标识（S4-fix）：✳ CodeM / ✳ 豆包，随切换同步 */
 	private agentBrandEl: HTMLElement | null = null;
@@ -278,11 +283,12 @@ export class CodeMChatView extends ItemView {
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
 	/** 模型参数（v0.5.1 UI 对标叶版）：CLI 进程启动参数，变更后重启 ACP 进程生效（探针实测 --intelligence/--reasoning-effort/--plan 均可用）
 	 *  model（S4）：豆包专用 --model；CodeM 模式不消费，留值不生效 */
-	private modelOpts: { intelligence: string; reasoning: string; plan: boolean; model: string } = {
+	private modelOpts: { intelligence: string; reasoning: string; plan: boolean; model: string; claudeModel: string } = {
 		intelligence: '', // 空 = 跟随配置（不传参）
 		reasoning: '',
 		plan: false,
 		model: '', // 空 = 豆包默认 Auto
+		claudeModel: '', // 空 = Claude CLI 默认档（CC-fix）
 	};
 	/** 底部会话短码显示（叶版式：✳ CodeM · 376d7c7d） */
 	private sidEl: HTMLElement | null = null;
@@ -594,6 +600,11 @@ export class CodeMChatView extends ItemView {
 		this.modelChipBtn = this.buildOptChip(
 			chips, '模型', 'codem-chat-model', DOUBAO_MODELS, () => this.modelOpts.model, (v) => (this.modelOpts.model = v), 'cpu'
 		);
+		// Claude 模型 chip（CC-fix）：--model 档位 alias（轻量/标准/旗舰，经 settings.json 映射实际模型）；
+		// 与豆包模型 chip 互斥显隐（updateBackendChip），值集与存储独立
+		this.claudeModelChipBtn = this.buildOptChip(
+			chips, '模型', 'codem-chat-model', ['haiku', 'sonnet', 'opus'], () => this.modelOpts.claudeModel, (v) => (this.modelOpts.claudeModel = v), 'cpu'
+		);
 		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
 		// S4：豆包无对应参数——豆包模式隐藏（updateBackendChip 控显隐）
@@ -859,7 +870,7 @@ export class CodeMChatView extends ItemView {
 				});
 				el.createDiv({
 					cls: 'codem-chat-empty-tip',
-					text: '💡 流式输出（真打字机）· 权限切「完全访问」= 跳过权限确认 · @ 引用笔记',
+					text: '💡 流式输出（真打字机）· 模型/思考预算 chip 可调 · 权限「完全访问」= 跳过确认 · @ 引用笔记',
 				});
 			} else {
 				el.createDiv({ cls: 'codem-chat-empty-icon', text: '⬇' });
@@ -1433,11 +1444,11 @@ export class CodeMChatView extends ItemView {
 		// S4-fix：品牌标识与输入框占位符同步切换（左上角 ✳ CodeM → ✳ 豆包 / ✳ Claude）
 		this.agentBrandEl?.setText(isDoubao ? '✳ 豆包' : isClaude ? '✳ Claude' : '✳ CodeM');
 		if (this.inputEl && !this.activeTab.busy) this.inputEl.placeholder = this.inputPlaceholder();
-		// chip 按后端互斥显隐：Plan=CodeM 专属（--plan）；模型=豆包独有（--model）；
-		// 智能强度=CodeM(--intelligence)/豆包(--effort) 同名同集，Claude 无对应参数
+		// chip 按后端互斥显隐：Plan=CodeM 专属（--plan）；模型 chip 豆包/Claude 各一套（--model 值集不同）互斥显隐；
+		// 智能强度三后端常显（CodeM --intelligence / 豆包 --effort / Claude 思考预算 MAX_THINKING_TOKENS）
 		this.planBtn?.toggleClass('codem-is-hidden', isDoubao || isClaude);
 		this.modelChipBtn?.toggleClass('codem-is-hidden', !isDoubao);
-		this.intelligenceChipBtn?.toggleClass('codem-is-hidden', isClaude);
+		this.claudeModelChipBtn?.toggleClass('codem-is-hidden', !isClaude);
 	}
 
 	private buildOptChip(
@@ -1863,12 +1874,16 @@ export class CodeMChatView extends ItemView {
 		 const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
 		 // 权限映射：完全访问（yolo）→ --dangerously-skip-permissions；其余档走 CLI 默认。
 		 // 模型路由沿用 ~/.claude/settings.json（CC-Switch 管理），不传 --model
-		 this.client = new ClaudeBackend(
-		  {
+		 // CC-fix：模型档位 chip → --model alias；智能强度 chip → 思考预算（low 2k / medium 8k / high 16k / xhigh 32k）
+		  const thinkMap: Record<string, number> = { low: 2048, medium: 8192, high: 16384, xhigh: 31999 };
+		   this.client = new ClaudeBackend(
+		   {
 		   cliPath: expandPath(this.plugin.settings.claudeCliPath || defaultClaudeCli()),
-		   cwd,
-		   skipPermissions: this.permMode === 'yolo',
-		  },
+		  cwd,
+		    skipPermissions: this.permMode === 'yolo',
+		    model: this.modelOpts.claudeModel || undefined,
+		    thinkingTokens: this.modelOpts.intelligence ? thinkMap[this.modelOpts.intelligence] : undefined,
+		   },
 		  {
 		   onUpdate: (sid, u) => this.handleUpdate(sid, u),
 		  }

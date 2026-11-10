@@ -24,6 +24,10 @@ export interface ClaudeOptions {
 	cwd: string;
 	/** 跳过全部权限确认（permMode=yolo 时置 true → --dangerously-skip-permissions） */
 	skipPermissions?: boolean;
+	/** 模型档位 alias（haiku/sonnet/opus，经 ~/.claude/settings.json 映射实际模型）；省略 = CLI 默认档 */
+	model?: string;
+	/** 思考预算 token 数（MAX_THINKING_TOKENS 环境变量注入）；省略 = CLI 默认 */
+	thinkingTokens?: number;
 	/** 调试日志路径 */
 	debugLogPath?: string;
 }
@@ -129,11 +133,15 @@ export class ClaudeBackend implements AgentBackend {
 		const args: string[] = ['-p', text, '--output-format', 'stream-json', '--verbose'];
 		if (realId) args.push('--resume', realId);
 		if (this.opts.skipPermissions) args.push('--dangerously-skip-permissions');
+		if (this.opts.model) args.push('--model', this.opts.model);
 
 		return new Promise<string>((resolve, reject) => {
 			let child: ChildProcess;
 			try {
 				const { exe, wrap } = this.resolveSpawnTarget();
+				// CC-fix：思考预算经 MAX_THINKING_TOKENS 注入（Claude Code 官方环境变量）
+				const spawnEnv: NodeJS.ProcessEnv = { ...process.env };
+				if (this.opts.thinkingTokens) spawnEnv.MAX_THINKING_TOKENS = String(this.opts.thinkingTokens);
 				if (wrap) {
 					const comspec =
 						process.env.ComSpec && fs.existsSync(process.env.ComSpec)
@@ -144,6 +152,7 @@ export class ClaudeBackend implements AgentBackend {
 						cwd: this.opts.cwd,
 						windowsHide: true,
 						stdio: ['ignore', 'pipe', 'pipe'],
+						env: spawnEnv,
 					});
 				} else {
 					this.log(`spawn(direct) ${exe}`);
@@ -151,6 +160,7 @@ export class ClaudeBackend implements AgentBackend {
 						cwd: this.opts.cwd,
 						windowsHide: true,
 						stdio: ['ignore', 'pipe', 'pipe'],
+						env: spawnEnv,
 					});
 				}
 			} catch (e) {

@@ -91,6 +91,8 @@ export class CodeMSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		// CC-fix：分区样式作用域（驾驶舱设计语言 emoji 分组标题）
+		containerEl.addClass('codem-chat-settings-page');
 
 		// —— 对话后端（豆包集成 S2 / CC 集成）：切换立即生效 ——
 		new Setting(containerEl)
@@ -113,40 +115,10 @@ export class CodeMSettingTab extends PluginSettingTab {
 					})
 		);
 
-		new Setting(containerEl)
-			.setName('豆包 CLI 路径')
-			.setDesc('推荐 doubao.exe 原生路径，留空用默认位置（%LOCALAPPDATA%\\doubao_cli\\app\\current\\doubao.exe）；填 doubao.cmd 也可，将自动升级为原生 exe')
-			.addText((text) =>
-				text
-				.setPlaceholder('留空自动探测')
-				.setValue(this.plugin.settings.doubaoCliPath)
-				.onChange(async (v) => {
-					this.plugin.settings.doubaoCliPath = v;
-					await this.plugin.saveSettings();
-				})
-		)
-
-		new Setting(containerEl)
-			.setName('Claude CLI 路径')
-			.setDesc('claude.cmd 或原生 claude.exe，留空自动探测（与 CodeM/豆包同 node 目录）；模型路由沿用 ~/.claude/settings.json（CC-Switch 管理），本插件不传 --model')
-			.addText((text) =>
-				text
-				.setPlaceholder('留空自动探测')
-				.setValue(this.plugin.settings.claudeCliPath)
-				.onChange(async (v) => {
-					this.plugin.settings.claudeCliPath = v;
-					await this.plugin.saveSettings();
-				})
-		);
-
-		// —— 豆包环境（S4 尾巴：自检 + npm 一键安装）——
-		const doubaoEnvSetting = new Setting(containerEl).setName('豆包环境');
-		this.refreshDoubaoEnv(doubaoEnvSetting);
-
-		// —— CodeM 环境（自检 + 一键安装）——
+		// ===== 分区标题（驾驶舱设计语言：emoji 分组，设置项按 agent 归属排列） =====
+		new Setting(containerEl).setHeading().setName('💬 CodeM（ACP）');
 		const envSetting = new Setting(containerEl).setName('CodeM 环境');
 		this.refreshEnv(envSetting);
-
 		new Setting(containerEl)
 			.setName('CodeM CLI 路径')
 			.setDesc('codem.cmd 完整路径，支持 ~ 表示用户目录')
@@ -160,6 +132,37 @@ export class CodeMSettingTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl).setHeading().setName('🫘 豆包 CLI');
+		const doubaoEnvSetting = new Setting(containerEl).setName('豆包环境');
+		this.refreshDoubaoEnv(doubaoEnvSetting);
+		new Setting(containerEl)
+			.setName('豆包 CLI 路径')
+			.setDesc('推荐 doubao.exe 原生路径，留空用默认位置（%LOCALAPPDATA%\\doubao_cli\\app\\current\\doubao.exe）；填 doubao.cmd 也可，将自动升级为原生 exe')
+			.addText((text) =>
+				text
+				.setPlaceholder('留空自动探测')
+				.setValue(this.plugin.settings.doubaoCliPath)
+				.onChange(async (v) => {
+					this.plugin.settings.doubaoCliPath = v;
+					await this.plugin.saveSettings();
+				})
+		)
+
+		new Setting(containerEl).setHeading().setName('🤖 Claude Code');
+		new Setting(containerEl)
+			.setName('Claude CLI 路径')
+			.setDesc('claude.cmd 或原生 claude.exe，留空自动探测（与 CodeM/豆包同 node 目录）；模型档位与思考预算在聊天框底部 chip 切换，底层模型路由沿用 ~/.claude/settings.json（CC-Switch 管理）')
+			.addText((text) =>
+				text
+				.setPlaceholder('留空自动探测')
+				.setValue(this.plugin.settings.claudeCliPath)
+				.onChange(async (v) => {
+					this.plugin.settings.claudeCliPath = v;
+					await this.plugin.saveSettings();
+				})
+		);
+
+		new Setting(containerEl).setHeading().setName('🎛️ 通用');
 		new Setting(containerEl)
 			.setName('Node.js 目录')
 			.setDesc('codem.cmd 启动器需要 PATH 里有 node；留空自动探测（进程 PATH / 常见安装位置）')
