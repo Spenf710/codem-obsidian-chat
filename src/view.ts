@@ -262,16 +262,20 @@ export class CodeMChatView extends ItemView {
 	private backendIconEl: HTMLElement | null = null;
 	/** Plan chip（S4：豆包模式隐藏，CodeM 专属 --plan 无对应） */
 	private planBtn: HTMLButtonElement | null = null;
+	/** 模型 chip（S4：豆包独有 --model，CodeM 模式隐藏） */
+	private modelChipBtn: HTMLElement | null = null;
 	/** 信息行品牌标识（S4-fix）：✳ CodeM / ✳ 豆包，随切换同步 */
 	private agentBrandEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
 	/** 权限模式三档（v0.5.0 UI 对标叶版）：🔒手动 / ✨智能（只读白名单自动）/ 🤖YOLO（全部自动） */
 	private permMode: 'manual' | 'smart' | 'yolo' = 'smart';
-	/** 模型参数（v0.5.1 UI 对标叶版）：CLI 进程启动参数，变更后重启 ACP 进程生效（探针实测 --intelligence/--reasoning-effort/--plan 均可用） */
-	private modelOpts: { intelligence: string; reasoning: string; plan: boolean } = {
+	/** 模型参数（v0.5.1 UI 对标叶版）：CLI 进程启动参数，变更后重启 ACP 进程生效（探针实测 --intelligence/--reasoning-effort/--plan 均可用）
+	 *  model（S4）：豆包专用 --model；CodeM 模式不消费，留值不生效 */
+	private modelOpts: { intelligence: string; reasoning: string; plan: boolean; model: string } = {
 		intelligence: '', // 空 = 跟随配置（不传参）
 		reasoning: '',
 		plan: false,
+		model: '', // 空 = 豆包默认 Auto
 	};
 	/** 底部会话短码显示（叶版式：✳ CodeM · 376d7c7d） */
 	private sidEl: HTMLElement | null = null;
@@ -569,6 +573,22 @@ export class CodeMChatView extends ItemView {
 		// 智能强度 chip（v1.0.5 对齐原生命名）：label 语义紫蓝（叶部 --codem-accent）；
 		// CodeM 走 --intelligence；豆包同名直传 --effort（实测两者档位同集，含 xhigh），跟随配置=不传
 		this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v), 'gauge');
+		// 模型 chip（S4 豆包独有）：--model 指定模型，跟随=不传（CLI 默认 Auto）；
+		// 合法值实测挖出（invalid 探针报错回显）：9 个，含第三方模型；CodeM 模式隐藏（updateBackendChip 控显隐）
+		const DOUBAO_MODELS = [
+			'Auto',
+			'豆包 2.1 Lite',
+			'豆包 2.1 Pro',
+			'豆包 2.1 Turbo',
+			'DeepSeek V4 Pro',
+			'DeepSeek V4.1 Flash',
+			'Kimi K3.1 Pro',
+			'GLM 5.3',
+			'GLM 5.3 Flash',
+		];
+		this.modelChipBtn = this.buildOptChip(
+			chips, '模型', 'codem-chat-model', DOUBAO_MODELS, () => this.modelOpts.model, (v) => (this.modelOpts.model = v), 'cpu'
+		);
 		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
 		// S4：豆包无对应参数——豆包模式隐藏（updateBackendChip 控显隐）
@@ -1307,8 +1327,10 @@ export class CodeMChatView extends ItemView {
 		// S4-fix：品牌标识与输入框占位符同步切换（左上角 ✳ CodeM → ✳ 豆包）
 		this.agentBrandEl?.setText(isDoubao ? '✳ 豆包' : '✳ CodeM');
 		if (this.inputEl && !this.activeTab.busy) this.inputEl.placeholder = this.inputPlaceholder();
-		// S4：Plan 为 CodeM 专属参数（--plan 只读模式），豆包无对应——按后端显隐
+		// S4：Plan 为 CodeM 专属参数（--plan 只读模式），豆包无对应——按后端显隐；
+		// 模型 chip 相反：豆包独有 --model，CodeM 模式隐藏
 		this.planBtn?.toggleClass('codem-is-hidden', isDoubao);
+		this.modelChipBtn?.toggleClass('codem-is-hidden', !isDoubao);
 	}
 
 	private buildOptChip(
@@ -1319,7 +1341,7 @@ export class CodeMChatView extends ItemView {
 		get: () => string,
 		set: (v: string) => void,
 		icon?: string
-	): void {
+	): HTMLElement {
 		const btn = host.createEl('button', { cls: 'codem-chat-chip ' + kindCls, attr: { type: 'button' } });
 		const inner = btn.createSpan({ cls: 'codem-chat-chip-inner' });
 		// v1.0.9 BUG-1：可选 SVG 图标——与权限 chip 同款 14px 图标，消除有无图标造成的基线高度差
@@ -1351,6 +1373,7 @@ export class CodeMChatView extends ItemView {
 			}
 			menu.showAtMouseEvent(e);
 		};
+		return btn; // S4：返回元素供 updateBackendChip 按后端控显隐（模型 chip 豆包独有）
 	}
 
 	/**
@@ -1720,6 +1743,7 @@ export class CodeMChatView extends ItemView {
 					cwd,
 					permissionMode: permMap[this.permMode] ?? 'ask_risky',
 					effort: this.modelOpts.intelligence || undefined,
+					model: this.modelOpts.model || undefined,
 				},
 				{
 					onUpdate: (sid, u) => this.handleUpdate(sid, u),
