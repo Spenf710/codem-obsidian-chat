@@ -22,7 +22,7 @@ export interface DoubaoOptions {
 	cwd: string;
 	/** 权限档位：ask_always / ask_risky / always_allow（省略 = CLI 默认 ask_risky） */
 	permissionMode?: string;
-	/** 推理强度：Low / Medium / High（省略 = CLI 默认 High） */
+	/** 推理强度：实测小写词表 none/minimal/low/medium/high/xhigh/max（官方文档「Low/Medium/High」写法实测报 invalid_arguments；省略 = CLI 默认档） */
 	effort?: string;
 	/** 模型（空 = Auto） */
 	model?: string;

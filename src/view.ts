@@ -260,6 +260,8 @@ export class CodeMChatView extends ItemView {
 	/** 后端切换 chip（豆包集成 S4）：CodeM / 豆包 CLI 图标与文案 span（切换后同步） */
 	private backendLabelEl: HTMLElement | null = null;
 	private backendIconEl: HTMLElement | null = null;
+	/** Plan chip（S4：豆包模式隐藏，CodeM 专属 --plan 无对应） */
+	private planBtn: HTMLButtonElement | null = null;
 	/** 信息行品牌标识（S4-fix）：✳ CodeM / ✳ 豆包，随切换同步 */
 	private agentBrandEl: HTMLElement | null = null;
 	private stopBtn!: HTMLButtonElement;
@@ -507,32 +509,7 @@ export class CodeMChatView extends ItemView {
 		// 工具栏（输入框内底部，只放可操作控件——叶部 v1.8.0 Composer 重排结构）
 		const bottomRow = inputWrap.createDiv({ cls: 'codem-chat-bottomrow' });
 		const chips = bottomRow.createDiv({ cls: 'codem-chat-chips' });
-		// 权限模式 chip（v0.6.0 三段式：档位名 value + chevron，对齐叶部 chip 结构）
-		// v0.6.5：方案 F（对照实验唯一零错位）——全部内容包进内层 flex span，基线由 flex 强制，免疫 emoji 大行盒
-		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-perm', attr: { type: 'button' } });
-		const permInner = this.permBtn.createSpan({ cls: 'codem-chat-chip-inner' });
-		// v1.0.6：chip 带图标（对齐原生：shield 请求批准 / shield-check 帮我批准 / zap 完全访问）
-		this.permIconEl = permInner.createSpan({ cls: 'codem-chat-chip-icon' });
-		this.permLabelEl = permInner.createSpan({ cls: 'codem-chat-chip-value' });
-		permInner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
-		this.permBtn.setAttribute('aria-label', '权限模式：请求批准 / 帮我批准 / 完全访问，点击选择');
-		this.permBtn.onclick = (e) => {
-			const menu = new Menu();
-			// v1.0.5：按 CodeM 原生客户端命名（截屏确认：请求批准 / 帮我批准 / 完全访问）
-			const modes: Array<{ mode: 'manual' | 'smart' | 'yolo'; title: string; icon: string }> = [
-				{ mode: 'manual', title: '请求批准', icon: 'shield' },
-				{ mode: 'smart', title: '帮我批准', icon: 'shield-check' },
-				{ mode: 'yolo', title: '完全访问', icon: 'zap' },
-			];
-			for (const it of modes) {
-				menu.addItem((mi) =>
-					mi.setTitle(it.title).setIcon(it.icon).setChecked(this.permMode === it.mode).onClick(() => this.setPermMode(it.mode))
-				);
-			}
-			menu.showAtMouseEvent(e);
-		};
-		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
-		// 后端切换 chip（豆包集成 S4）：CodeM（ACP）/ 豆包 CLI 点击即切，免进设置页；三段式同权限 chip
+		// 后端切换 chip（豆包集成 S4）：置于 chip 行首位——它是会话级总开关，语义优先级最高
 		const backendBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-backend', attr: { type: 'button' } });
 		const backendInner = backendBtn.createSpan({ cls: 'codem-chat-chip-inner' });
 		this.backendIconEl = backendInner.createSpan({ cls: 'codem-chat-chip-icon' });
@@ -564,11 +541,39 @@ export class CodeMChatView extends ItemView {
 			menu.showAtMouseEvent(e);
 		};
 		this.updateBackendChip();
-		// 智能强度 chip（v1.0.5 对齐原生命名）：label 语义紫蓝（叶部 --codem-accent）；CLI --intelligence，跟随配置=不传
+		// 权限模式 chip（v0.6.0 三段式：档位名 value + chevron，对齐叶部 chip 结构）
+		// v0.6.5：方案 F（对照实验唯一零错位）——全部内容包进内层 flex span，基线由 flex 强制，免疫 emoji 大行盒
+		this.permBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-perm', attr: { type: 'button' } });
+		const permInner = this.permBtn.createSpan({ cls: 'codem-chat-chip-inner' });
+		// v1.0.6：chip 带图标（对齐原生：shield 请求批准 / shield-check 帮我批准 / zap 完全访问）
+		this.permIconEl = permInner.createSpan({ cls: 'codem-chat-chip-icon' });
+		this.permLabelEl = permInner.createSpan({ cls: 'codem-chat-chip-value' });
+		permInner.createSpan({ cls: 'codem-chat-chip-chevron', text: '▾' });
+		this.permBtn.setAttribute('aria-label', '权限模式：请求批准 / 帮我批准 / 完全访问，点击选择');
+		this.permBtn.onclick = (e) => {
+			const menu = new Menu();
+			// v1.0.5：按 CodeM 原生客户端命名（截屏确认：请求批准 / 帮我批准 / 完全访问）
+			const modes: Array<{ mode: 'manual' | 'smart' | 'yolo'; title: string; icon: string }> = [
+				{ mode: 'manual', title: '请求批准', icon: 'shield' },
+				{ mode: 'smart', title: '帮我批准', icon: 'shield-check' },
+				{ mode: 'yolo', title: '完全访问', icon: 'zap' },
+			];
+			for (const it of modes) {
+				menu.addItem((mi) =>
+					mi.setTitle(it.title).setIcon(it.icon).setChecked(this.permMode === it.mode).onClick(() => this.setPermMode(it.mode))
+				);
+			}
+			menu.showAtMouseEvent(e);
+		};
+		this.setPermMode(this.plugin.settings.readonlyAutoApprove === false ? 'manual' : 'smart');
+		// 智能强度 chip（v1.0.5 对齐原生命名）：label 语义紫蓝（叶部 --codem-accent）；
+		// CodeM 走 --intelligence；豆包同名直传 --effort（实测两者档位同集，含 xhigh），跟随配置=不传
 		this.buildOptChip(chips, '智能强度', 'codem-chat-intelligence', ['low', 'medium', 'high', 'xhigh'], () => this.modelOpts.intelligence, (v) => (this.modelOpts.intelligence = v), 'gauge');
 		// 推理 chip v1.0.4 已移除：预置模型用「智能」档，推理档对预置模型无效且混淆视觉
 		// Plan toggle chip：只读工作模式开关（CLI --plan，与权限模式正交）；开启渐变高亮（叶部式）
-		const planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
+		// S4：豆包无对应参数——豆包模式隐藏（updateBackendChip 控显隐）
+		this.planBtn = chips.createEl('button', { cls: 'codem-chat-chip codem-chat-plan', attr: { type: 'button' } });
+		const planBtn = this.planBtn;
 		// v1.0.9 BUG-1：Plan chip 图标 emoji → SVG（与权限/智能强度 chip 一致，基线对齐）
 		const planInner = planBtn.createSpan({ cls: 'codem-chat-chip-inner' });
 		const planIcon = planInner.createSpan({ cls: 'codem-chat-chip-icon' });
@@ -1225,6 +1230,9 @@ export class CodeMChatView extends ItemView {
 		this.permBtn.removeClass('is-manual', 'is-smart', 'is-yolo');
 		this.permBtn.addClass('is-' + mode);
 		this.permBtn.toggleClass('is-active', mode === 'yolo');
+		// S4：豆包模式——权限档位映射 --permission-mode 启动参数，切档后重建后端使下一轮生效；
+		// 复用 applyModelOpts（豆包 loadSession = 登记真 ID 映射，云端会话续聊不受影响）
+		if (this.plugin.settings.backend === 'doubao') this.applyModelOpts();
 	}
 
 	/** 输入历史回溯：delta<0 上一条（从最近开始），delta>0 下一条，走到底恢复空输入 */
@@ -1299,6 +1307,8 @@ export class CodeMChatView extends ItemView {
 		// S4-fix：品牌标识与输入框占位符同步切换（左上角 ✳ CodeM → ✳ 豆包）
 		this.agentBrandEl?.setText(isDoubao ? '✳ 豆包' : '✳ CodeM');
 		if (this.inputEl && !this.activeTab.busy) this.inputEl.placeholder = this.inputPlaceholder();
+		// S4：Plan 为 CodeM 专属参数（--plan 只读模式），豆包无对应——按后端显隐
+		this.planBtn?.toggleClass('codem-is-hidden', isDoubao);
 	}
 
 	private buildOptChip(
@@ -1360,7 +1370,13 @@ export class CodeMChatView extends ItemView {
 			this.restarting = false;
 			return;
 		}
-		new Notice('已按新参数重启 CodeM 进程，正在恢复会话…', 3000);
+		// S4：豆包每轮新进程无需“重启”语义，文案区分；恢复逻辑通用（loadSession=登记真 ID 映射）
+		new Notice(
+			this.plugin.settings.backend === 'doubao'
+				? '已更新豆包运行参数，下一轮对话生效'
+				: '已按新参数重启 CodeM 进程，正在恢复会话…',
+			3000
+		);
 		void (async () => {
 			try {
 				const client = await this.ensureClient();
@@ -1694,12 +1710,16 @@ export class CodeMChatView extends ItemView {
 		// —— 豆包后端（豆包集成 S2）：每轮独立进程，无长驻连接 ——
 		if (this.plugin.settings.backend === 'doubao') {
 			const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
+			// S4 控件继承：权限三档 → --permission-mode；智能强度 → --effort。
+			// 实测（2026-11-10）：effort 取值为小写且与 CodeM 档位同名同集（none/minimal/low/medium/high/xhigh/max；
+			// 官方文档写「Low/Medium/High」为过时/错误——大写实测报 invalid_arguments），故恒等直传
+			const permMap: Record<string, string> = { manual: 'ask_always', smart: 'ask_risky', yolo: 'always_allow' };
 			this.client = new DoubaoBackend(
 				{
 					cliPath: expandPath(this.plugin.settings.doubaoCliPath || defaultDoubaoExe()),
 					cwd,
-					// 权限档位 S5 接 permMode 三档映射（manual/smart/yolo → ask_always/ask_risky/always_allow）
-					permissionMode: 'ask_risky',
+					permissionMode: permMap[this.permMode] ?? 'ask_risky',
+					effort: this.modelOpts.intelligence || undefined,
 				},
 				{
 					onUpdate: (sid, u) => this.handleUpdate(sid, u),
