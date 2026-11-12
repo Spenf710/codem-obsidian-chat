@@ -2037,7 +2037,12 @@ export class CodeMChatView extends ItemView {
 		this.closeSuggest();
 		tab.scrollEl.querySelector('.codem-chat-empty')?.remove();
 
-		// 无响应看门狗：5 分钟没有任何更新则提示一次（不中断执行，等待或重试由用户决定）
+		// 无响应看门狗：5 分钟没有任何更新则提示一次（不中断执行，等待或重试由用户决定）。
+		// CC3：按后端分策略——强制收尾（杀进程）仅保留给 CodeM ACP（防最终 response 丢失 UI 永挂）；
+		// 豆包/Claude 每轮独立进程：进程退出自然收尾（close 兜底），不存在“response 丢失”场景，
+		// 强杀反而误杀 30-40 分钟的云端长任务（-p 无流式，期间必然无 lastActivity 更新）。
+		const perTurnBackend = this.plugin.settings.backend;
+		const forceFinish = perTurnBackend === 'codem';
 		tab.lastActivity = Date.now();
 		let stallNotified = false;
 		const watchdog = window.setInterval(() => {
@@ -2048,14 +2053,19 @@ export class CodeMChatView extends ItemView {
 			if (!stallNotified && Date.now() - tab.lastActivity > 300000) {
 				stallNotified = true;
 				new Notice(
-					'已超过 5 分钟没有新响应。若一直停在这里，请检查网络后重试；也可能是 CodeM 刚自动更新导致，可向官方反馈。',
-					12000
+					perTurnBackend === 'doubao'
+						? '豆包已执行 5 分钟以上，长任务可能持续 30-40 分钟——继续等待即可；点 ⏹/Esc 可随时停止本地等待（云端任务若已完成，可从历史会话续接取回结果）'
+						: perTurnBackend === 'claude'
+							? 'Claude 已执行 5 分钟以上无输出——长任务属正常；点 ⏹/Esc 可随时停止'
+							: '已超过 5 分钟没有新响应。若一直停在这里，请检查网络后重试；也可能是 CodeM 刚自动更新导致，可向官方反馈。',
+						12000
 				);
 				return;
 			}
-			// 强制收尾：CLI 端 turn 可能已结束但最终 response 丢失，prompt 永久挂起、UI 卡"执行中"。
+			// 强制收尾：CLI 端 turn 可能已结束但最终 response 丢失，prompt 永久挂起、UI 卡“执行中”。
 			// turnSeq+1 使旧 send 的 finally 失效，由这里接管 UI 复位（cancel 只是 best effort，不保证救回）。
-			if (stallNotified && Date.now() - tab.lastActivity > 360000) {
+			// CC3：仅 CodeM ACP——豆包/Claude 无 response 丢失风险（进程退出必经 close 兜底），跳过以防误杀长任务
+			if (forceFinish && stallNotified && Date.now() - tab.lastActivity > 360000) {
 				window.clearInterval(watchdog);
 				tab.turnSeq++;
 				if (tab.sessionId) this.client?.cancelSession(tab.sessionId);
