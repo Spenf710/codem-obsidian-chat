@@ -534,3 +534,56 @@ export async function claudeSessionCards(extra: Record<string, DoubaoSessionMeta
 	cards.sort((a, b) => (b.lastTime || '').localeCompare(a.lastTime || ''));
 	return cards;
 }
+
+// ===== Claude 会话回显解析（CC5：~/.claude/projects jsonl → Turn[]，历史面板回显正文）=====
+
+/**
+ * 读取 Claude Code 会话完整轮次（历史回显用，CC5）。
+ * 行结构（2026-11-13 探针实测）：
+ * - queue-operation{operation:'enqueue',content=用户原文,timestamp} → 用户消息
+ *   （type:"User" 行全带 attachment=CLAUDE.md 指令注入，不是用户输入，跳过）
+ * - assistant{message:{content:[{type:'thinking',thinking}|{type:'text',text}|{type:'tool_use',name,input}]}} → 助手消息
+ *   （一轮可产生多条 assistant message：tool_use 中间消息 + 最终文本，连续 assistant 行合并为一轮）
+ * - isSidechain=true 为子代理行，跳过
+ * 大会话保护：只回显尾部 maxTurns 轮（6.3MB 会话实测数十轮，防 DOM 爆炸）。
+ */
+export async function readClaudeSessionTurns(filePath: string, maxTurns = 80): Promise<Turn[]> {
+	const turns: Turn[] = [];
+	const tsOf = (obj: Record<string, unknown>): string =>
+		typeof obj.timestamp === 'string' ? obj.timestamp : '';
+	await parseJsonlLines(filePath, (obj) => {
+		if (obj.isSidechain === true) return; // 子代理
+		const t = obj.type as string;
+		if (t === 'queue-operation' && obj.operation === 'enqueue') {
+			const text = typeof obj.content === 'string' ? obj.content : '';
+			if (text.trim() && !text.startsWith('<')) {
+				turns.push({ role: 'user', blocks: [{ kind: 'text', content: text }], timestamp: tsOf(obj) });
+			}
+		} else if (t === 'assistant') {
+			const content = (obj.message as { content?: unknown[] } | undefined)?.content;
+			const blocks: TurnBlock[] = [];
+			if (Array.isArray(content)) {
+				for (const b of content as Array<Record<string, unknown>>) {
+					if (b?.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim()) {
+						blocks.push({ kind: 'thinking', content: b.thinking });
+					} else if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+						blocks.push({ kind: 'text', content: b.text });
+					} else if (b?.type === 'tool_use') {
+						const name = typeof b.name === 'string' ? b.name : '工具';
+						const input = typeof b.input === 'string' ? b.input : JSON.stringify(b.input ?? {}, null, 2);
+						blocks.push({ kind: 'tool_use', label: name, content: input.slice(0, 2000) });
+					}
+				}
+			}
+			if (!blocks.length) return;
+			// 连续 assistant 行（同轮多条 message）合并为一轮
+			const last = turns[turns.length - 1];
+			if (last && last.role === 'assistant') {
+				last.blocks.push(...blocks);
+			} else {
+				turns.push({ role: 'assistant', blocks, timestamp: tsOf(obj) });
+			}
+		}
+	});
+	return turns.length > maxTurns ? turns.slice(-maxTurns) : turns;
+}

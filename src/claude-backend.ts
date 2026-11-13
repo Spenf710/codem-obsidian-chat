@@ -79,7 +79,7 @@ export class ClaudeBackend implements AgentBackend {
 	readonly capabilities: AgentBackendCapabilities = {
 		streaming: true,
 		permissionRequests: false,
-		sessionReplay: false,
+		sessionReplay: true, // CC5：本地 jsonl 回显已实现（readClaudeSessionTurns）
 	};
 
 	private realIds = new Map<string, string>();

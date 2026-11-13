@@ -29,6 +29,7 @@ interface CheckpointInfo {
 import {
 	listCodemSessions,
 	readCodemSessionTurns,
+	readClaudeSessionTurns,
 	listCodemSkills,
 	doubaoSessionCards,
 	claudeSessionCards,
@@ -3520,7 +3521,14 @@ export class CodeMChatView extends ItemView {
 		tab.scrollEl.createDiv({ cls: 'codem-chat-empty', text: '载入历史会话…' });
 		try {
 			// 豆包/Claude 卡片（S3/CC）：不走 ~/.codem jsonl，turns 为空——载入即 --resume 续聊
-			const turns = card.source === 'doubao' || card.source === 'claude' ? [] : await readCodemSessionTurns(card.filePath);
+			// CC5：Claude turns 本地 jsonl 回显（readClaudeSessionTurns 取尾部轮次）；豆包无本地落盘仍为空；
+			// 插件索引兑底卡片 filePath 为空——parseJsonlLines 无 error 处理，空路径会永久挂起，必须前置拦截
+			const turns =
+				card.source === 'doubao' || !card.filePath
+					? []
+					: card.source === 'claude'
+						? await readClaudeSessionTurns(card.filePath)
+						: await readCodemSessionTurns(card.filePath);
 			const client = await this.ensureClient();
 			// cwd 必须传会话自己的原始 cwd（探针实测：会话按 cwd hash 隔离，传错目录报 does not exist）；
 			// 换会话前先释放本连接持有的旧会话（daemon 层 writer 占位会堵死旧会话下次 load）
@@ -3570,15 +3578,19 @@ export class CodeMChatView extends ItemView {
 				);
 			}
 			tab.scrollEl.empty();
-			// 豆包/Claude 卡片（S3/CC）：无本地正文可回显，提示续聊语义
-			if (card.source === 'doubao' || card.source === 'claude') {
+			// 豆包（S3）：无本地正文可回显，提示续聊语义；Claude（CC5）本地 jsonl 回显，提示截取口径（无正文时退回续聊提示）
+			if (card.source === 'doubao' || (card.source === 'claude' && !turns.length)) {
 				tab.scrollEl
 					.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
 					.setText(
 						card.source === 'claude'
-							? '☁ 已载入 Claude Code 会话（CLI 上下文已保留）——历史消息暂不回显，直接继续对话即可'
+							? '☁ 已载入 Claude Code 会话（CLI 上下文已保留）——无本地正文可回显，直接继续对话即可'
 							: '☁ 已载入豆包会话（云端上下文已保留）——历史消息不本地回显，直接继续对话即可'
 					);
+			} else if (card.source === 'claude') {
+			 tab.scrollEl
+			  .createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
+			  .setText('☁ 已载入 Claude Code 会话——历史消息已从本地 jsonl 回显（取最近轮次），CLI 上下文完整保留，直接继续对话即可');
 			}
 			// v1.0.4：tool_result 并入前一个 tool_use 卡片——结果跟卡片走（叶部/Claudian 同构），
 			// 消灭游离的裸奔「工具结果」行；跨用户消息不配对，配不上保留原样兜底
