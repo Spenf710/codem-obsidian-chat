@@ -437,28 +437,42 @@ export function doubaoSessionCards(store: Record<string, DoubaoSessionMeta>, sou
  * 扫描 ~/.claude/projects 下全部 Claude Code 会话（按 cwd 分目录的 <uuid>.jsonl）→ 历史面板卡片。
  * 实测结构：首行 queue-operation{operation:'enqueue',content=用户原文,timestamp}；User/assistant 行含 cwd；
  * 会话 ID 即文件名，--resume 跨进程续聊同口径。插件本地索引作合并兜底（磁盘被清理的记录仍可见）。
+ * CC6：并入 ~/.claude/archives 归档目录（Claude Code 自动清理移出的旧会话，行结构同构；📦 前缀标记，仅回显不可续聊）。
  */
 export async function claudeSessionCards(extra: Record<string, DoubaoSessionMeta> = {}): Promise<SessionCard[]> {
 	const root = path.join(os.homedir(), '.claude', 'projects');
-	const files: string[] = [];
+	// CC6：files 带归档标记——projects=活跃会话（--resume 可续聊）；archives=Claude Code 自动清理移出的
+	// 旧会话（~/.claude/archives/<uuid>_<日期>.jsonl，行结构同构探针实测，解析器复用；仅回显不可续聊）
+	const files: { filePath: string; archived: boolean }[] = [];
 	try {
 		for (const d of await fs.promises.readdir(root)) {
 			const dir = path.join(root, d);
 			try {
 				if (!(await fs.promises.stat(dir)).isDirectory()) continue;
 				for (const f of await fs.promises.readdir(dir)) {
-					if (f.endsWith('.jsonl')) files.push(path.join(dir, f));
+					if (f.endsWith('.jsonl')) files.push({ filePath: path.join(dir, f), archived: false });
 				}
 			} catch {
 				continue;
 			}
 		}
+		// CC6：归档目录并入扫描（2026-11-13 实测 114 个会话，单文件最大 7MB）
+		try {
+			const archRoot = path.join(os.homedir(), '.claude', 'archives');
+			for (const f of await fs.promises.readdir(archRoot)) {
+				if (f.endsWith('.jsonl')) files.push({ filePath: path.join(archRoot, f), archived: true });
+			}
+		} catch {
+			// 无归档目录则跳过
+		}
 	} catch {
 		return [];
 	}
 	const cards: SessionCard[] = [];
-	for (const filePath of files) {
-		const sessionId = path.basename(filePath).replace(/\.jsonl$/, '');
+	for (const { filePath, archived } of files) {
+		// sessionId：projects=<uuid>.jsonl / archives=<uuid>_<日期>.jsonl——UUID 不含下划线，split 通吃两种命名
+		const sessionId = path.basename(filePath).replace(/\.jsonl$/, '').split('_')[0];
+		if (cards.some((c) => c.sessionId === sessionId)) continue; // projects 与归档去重（防御性，正常不共存）
 		let firstPrompt = '';
 		let cwd = '';
 		try {
@@ -507,7 +521,8 @@ export async function claudeSessionCards(extra: Record<string, DoubaoSessionMeta
 		cards.push({
 			sessionId,
 			filePath,
-			firstPrompt: firstPrompt.replace(/\s+/g, ' ').slice(0, 80),
+			// 📦 前缀标记归档会话（CLI 已移出 projects，--resume 大概率失败，仅回显浏览）
+			firstPrompt: (archived ? '📦 ' : '') + firstPrompt.replace(/\s+/g, ' ').slice(0, 80),
 			startTime: '',
 			lastTime: new Date(st.mtimeMs).toISOString(),
 			userTurns: 0,
