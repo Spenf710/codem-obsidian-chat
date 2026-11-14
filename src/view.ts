@@ -2705,8 +2705,10 @@ export class CodeMChatView extends ItemView {
 			details.setAttribute('open', '');
 			st.anchor.after(details);
 			st.anchor = details;
-			// v1.0.0 DOM 对齐叶部：summary 直接 flex 布局（CSS 控制图标+间距），无 tool-head/tool-icon span
+			// v1.0.0 DOM 对齐叶部：summary 直接 flex 布局；CC14：emoji ::before 退役，行首改 SVG 语义图标（与回显一致）
 			const headEl = details.createEl('summary');
+			const ico = headEl.createSpan({ cls: 'codem-chat-tool-ico' });
+			setIcon(ico, toolIcon(title));
 			const nameEl = headEl.createSpan({ cls: 'codem-chat-tool-name', text: title });
 			// v1.0.0 DOM 对齐叶部：状态用 data-status 属性驱动 CSS 颜色（.codem-chat-tool-status[data-status="completed"] { color: green }）
 			const statusEl = headEl.createSpan({ cls: 'codem-chat-tool-status' });
