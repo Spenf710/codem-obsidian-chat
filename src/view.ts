@@ -1177,6 +1177,7 @@ export class CodeMChatView extends ItemView {
 		this.activeTab.draft = this.inputEl.value;
 		for (const t of this.tabs) t.scrollEl.toggleClass('codem-is-hidden', t !== tab);
 		this.activeTab = tab;
+		this.updateBackendChip(); // CC9：chip 行随激活 tab 实时刷新（后端文案/品牌标识/占位符/模型/强度 chip 显隐按 tab 后端）
 		this.inputEl.value = tab.draft;
 		this.renderTabs();
 		this.renderPreviews();
@@ -1206,6 +1207,7 @@ export class CodeMChatView extends ItemView {
 				this.activeTab = this.createTab();
 				this.renderEmpty();
 				this.setStatusLight('idle');
+				this.updateBackendChip(); // CC9：空 tab 新建后 chip 同步默认后端
 			}
 		}
 		this.renderTabs();
