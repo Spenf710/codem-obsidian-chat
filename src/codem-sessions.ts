@@ -602,3 +602,33 @@ export async function readClaudeSessionTurns(filePath: string, maxTurns = 80): P
 	});
 	return turns.length > maxTurns ? turns.slice(-maxTurns) : turns;
 }
+
+/** CC7：按 sessionId 定位 Claude 会话文件（projects 活跃 + archives 归档，两处扫描）——tab 恢复回显用 */
+export async function findClaudeSessionFile(sessionId: string): Promise<string> {
+	if (!sessionId) return '';
+	const home = os.homedir();
+	// projects/<cwdDir>/<sessionId>.jsonl（活跃会话，按 cwd 子目录扫）
+	try {
+		const root = path.join(home, '.claude', 'projects');
+		for (const d of await fs.promises.readdir(root)) {
+			const p = path.join(root, d, sessionId + '.jsonl');
+			try {
+				if ((await fs.promises.stat(p)).isFile()) return p;
+			} catch {
+				continue;
+			}
+		}
+	} catch {
+		// 无目录则继续试归档
+	}
+	// archives/<sessionId>_<日期>.jsonl（归档会话，前缀匹配）
+	try {
+		const arch = path.join(home, '.claude', 'archives');
+		for (const f of await fs.promises.readdir(arch)) {
+			if (f.startsWith(sessionId) && f.endsWith('.jsonl')) return path.join(arch, f);
+		}
+	} catch {
+		// 无归档目录
+	}
+	return '';
+}

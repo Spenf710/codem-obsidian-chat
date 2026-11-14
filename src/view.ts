@@ -30,6 +30,7 @@ import {
 	listCodemSessions,
 	readCodemSessionTurns,
 	readClaudeSessionTurns,
+	findClaudeSessionFile,
 	listCodemSkills,
 	doubaoSessionCards,
 	claudeSessionCards,
@@ -3832,13 +3833,45 @@ export class CodeMChatView extends ItemView {
 		void this.replayTabHistory(tab);
 	}
 
-	/** v1.1.0 P1-1：按 sessionId 找磁盘会话卡并重放历史消息到对应 tab（只回显不 load，被外部占用也能看历史） */
+	/** v1.1.0 P1-1：按 sessionId 找磁盘会话卡并重放历史消息到对应 tab（只回显不 load，被外部占用也能看历史）
+	 *  CC7：按后端分流——CodeM 扫 ~/.codem jsonl；Claude 按 sessionId 定位 ~/.claude jsonl 回显
+	 *  （修复：重载/重开后 claude tab 恢复旧 sessionId 却无正文回显，用户误以为新会话，发消息被
+	 *  --resume 写回旧会话文件）；豆包无本地正文，提示条明确“恢复的是旧会话”防认知错位。 */
 	private async replayTabHistory(tab: ChatTab): Promise<void> {
 		try {
-			const cards = await listCodemSessions();
-			const card = cards.find((c) => c.sessionId === tab.sessionId);
-			if (!card) return;
-			const turns = await readCodemSessionTurns(card.filePath);
+			const backend = this.plugin.settings.backend;
+			let turns: Turn[] | null = null;
+			if (backend === 'claude' && tab.sessionId) {
+				// CC7：Claude——sessionId 定位本地 jsonl（projects 活跃 + archives 归档），尾部轮次回显
+				const filePath = await findClaudeSessionFile(tab.sessionId);
+				if (filePath) {
+					turns = await readClaudeSessionTurns(filePath);
+				} else {
+					// 本地文件缺失（CLI 清理/换机）：退化为提示条，不能留空壳伪装新会话
+					if (!tab.scrollEl.querySelector('.codem-chat-msg')) {
+						tab.scrollEl.empty();
+						tab.scrollEl
+							.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
+							.setText('☁ 已恢复 Claude 会话（本地正文缺失）——继续输入即 --resume 续接；需要全新会话请点「+」新建标签');
+						}
+					return;
+				}
+			} else if (backend === 'doubao' && tab.sessionId) {
+				// CC7：豆包——云端会话无本地正文，提示条明确恢复语义（防“以为是新会话”认知错位）
+				if (!tab.scrollEl.querySelector('.codem-chat-msg')) {
+					tab.scrollEl.empty();
+					tab.scrollEl
+						.createDiv({ cls: 'codem-chat-msg codem-chat-stopped' })
+						.setText('☁ 已恢复豆包会话——继续输入即续接云端上下文；需要全新会话请点「+」新建标签');
+				}
+				return;
+			} else {
+				const cards = await listCodemSessions();
+				const card = cards.find((c) => c.sessionId === tab.sessionId);
+				if (!card) return;
+				turns = await readCodemSessionTurns(card.filePath);
+			}
+			if (!turns) return;
 			// 用户已在该 tab 产出新内容（续聊过）就不覆盖：仅空壳（无消息）时回放
 			if (tab.scrollEl.querySelector('.codem-chat-msg')) return;
 			tab.scrollEl.empty();
