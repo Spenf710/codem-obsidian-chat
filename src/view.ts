@@ -117,8 +117,14 @@ interface RenderState {
 	thinking: HTMLDetailsElement;
 	thinkingSummary: HTMLElement;
 	thinkingBody: HTMLElement;
-	/** 时间线插入锚点：思考区 → 工具卡片/正文段依次后移 */
+	/** CC13：Claudian 式「工作」折叠项（思考+工具收进其内，正文在外）；textAnchor 为正文链尾（初始=work 本体） */
+	work: HTMLDetailsElement;
+	workSummary: HTMLElement;
+	workBody: HTMLElement;
+	/** 时间线插入锚点：思考区 → 工具卡片依次后移（正文段已改走 textAnchor 独立链，CC13） */
 	anchor: HTMLElement;
+	/** CC13：正文段链尾（work 之后依次排列，不进工作折叠区） */
+	textAnchor: HTMLElement;
 	curSeg: TextSeg | null;
 	textSegs: TextSeg[];
 	cards: Map<string, ToolCard>;
@@ -2338,6 +2344,13 @@ export class CodeMChatView extends ItemView {
 		} else {
 			st.thinking.hide();
 		}
+		// CC13：外层「工作」→「已完成工作」并收起（时间线只留正文，点开再看过程；全程无思考无工具则整项隐藏）
+		if (st.thinkingBody.textContent || st.toolCount > 0) {
+			st.workSummary.setText(st.toolCount > 0 ? `已完成工作（${st.toolCount} 次工具）` : '已完成工作');
+			st.work.removeAttribute('open');
+		} else {
+			st.work.hide();
+		}
 		// 轮末回收：未决审批统一回拒绝应答（服务端在等答复，不回会挂死这一轮），条目留痕不静默消失
 		this.recyclePerms(st, stopped ? '（本轮已停止，未处理）' : '（本轮已结束，未处理）');
 		st.pendingPerms.clear();
@@ -2534,12 +2547,17 @@ export class CodeMChatView extends ItemView {
 		const aiBlock = this.msgContainer.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
 		// 运行读数（v0.5.0）：轮次头部实时计时，finishTurn 移除并换轮末耗时条
 		const liveEl = aiBlock.createDiv({ cls: 'codem-chat-live', text: '⏱ 0s' });
-		const thinking = aiBlock.createEl('details', { cls: 'codem-chat-thinking' });
+		// CC13：Claudian 式「工作」外层可折叠项（执行中默认展开可收起）——思考过程+工具执行收进其内，正文段在项外
+		const work = aiBlock.createEl('details', { cls: 'codem-chat-work' });
+		work.setAttribute('open', '');
+		const workSummary = work.createEl('summary', { cls: 'codem-chat-work-title', text: '工作' });
+		const workBody = work.createDiv({ cls: 'codem-chat-work-body' });
+		const thinking = workBody.createEl('details', { cls: 'codem-chat-thinking' });
 		thinking.setAttribute('open', '');
 		const thinkingSummary = thinking.createEl('summary', { text: '思考中…' });
 		const thinkingBody = thinking.createDiv({ cls: 'codem-chat-thinking-body' });
 		this.scrollBottom();
-		return { aiBlock, thinking, thinkingSummary, thinkingBody, anchor: thinking, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map(), permRequests: [], thinkNode: null, liveEl, liveTimer: 0, turnStart: Date.now(), toolCount: 0 };
+		return { aiBlock, work, workSummary, workBody, thinking, thinkingSummary, thinkingBody, anchor: thinking, textAnchor: work, curSeg: null, textSegs: [], cards: new Map(), pendingPerms: new Map(), permRequests: [], thinkNode: null, liveEl, liveTimer: 0, turnStart: Date.now(), toolCount: 0 };
 	}
 
 	/** [[笔记/文件夹]] 引用 → 注入内容（发送给 CodeM，UI 显示原文） */
@@ -2638,12 +2656,12 @@ export class CodeMChatView extends ItemView {
 		if (kind === 'agent_message_chunk') {
 			const text = content?.text ?? '';
 			tab.mdBuffer += text;
-			// 时间线分段：无活动段则新开一段（插在最近工具卡片之后）——
-			// 阶段性输出紧跟其上方工具调用，最后一段即最终结论，自然落在最下方
+			// 时间线分段：无活动段则新开一段（CC13：正文段走 textAnchor 独立链，排在「工作」折叠项之后依次排列，
+			// 不进工作区；多段按到达顺序——最后一段即最终结论，自然落在最下方）
 			if (!st.curSeg) {
 				const el = createEl('div', { cls: 'codem-chat-text markdown-rendered' });
-				st.anchor.after(el);
-				st.anchor = el;
+				st.textAnchor.after(el);
+				st.textAnchor = el;
 				st.curSeg = { el, buf: '', shown: 0, done: false, plainNode: null };
 				st.textSegs.push(st.curSeg);
 			}
@@ -3697,26 +3715,30 @@ export class CodeMChatView extends ItemView {
 		return lines.join('\n');
 	}
 
-	/** CC12：回显渲染（分组版，Claudian 式）——过程类 turn（纯思考/工具块、独立工具调用）收进
-	 *  「思考过程」平铺区块：上下细分割线包裹 + 橙色标题（去 CC11 折叠框对话框感），条目直显、点工具行看结果 */
+	/** CC13：回显渲染（分组版，Claudian 式嵌套）——过程类 turn（纯思考/工具块、独立工具调用）收进
+	 *  「已完成工作」外层可折叠项（默认收起，轻量单行）：展开后 → 思考过程（自身可折叠）→ 工具执行（每条可展开结果） */
 	private renderHistoryTurnsGrouped(merged: Turn[], into: HTMLElement): void {
-		let procBody: HTMLElement | null = null;
+		let group: Turn[] = [];
+		const flushGroup = (): void => {
+			if (!group.length) return;
+			const work = into.createEl('details', { cls: 'codem-chat-work' });
+			work.createEl('summary', { cls: 'codem-chat-work-title', text: `已完成工作（${group.length} 项）` });
+			const body = work.createDiv({ cls: 'codem-chat-work-body' });
+			for (const t of group) this.renderHistoryTurn(t, body);
+			group = [];
+		};
 		for (const t of merged) {
 			const isProc =
 				t.role === 'tool' ||
 				(t.role === 'assistant' && !t.blocks.some((b) => b.kind === 'text'));
 			if (isProc) {
-				if (!procBody) {
-					const box = into.createDiv({ cls: 'codem-chat-proc' });
-					box.createDiv({ cls: 'codem-chat-proc-title', text: '思考过程' });
-					procBody = box.createDiv({ cls: 'codem-chat-proc-body' });
-				}
-				this.renderHistoryTurn(t, procBody);
+				group.push(t);
 			} else {
-				procBody = null;
+				flushGroup();
 				this.renderHistoryTurn(t, into);
 			}
 		}
+		flushGroup();
 	}
 
 	/** v1.0.2 P0：历史会话渲染——DOM 对齐叶部 CSS（与实时对话 handleToolEvent 同构） */
