@@ -3639,6 +3639,9 @@ export class CodeMChatView extends ItemView {
 			 merged.push(t);
 			}
 			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
+			// CC10：轮数按用户问句数统计（与轮次目录/goToTurn 同口径），修正快照残留值与实际回显不符
+			tab.turnCount = merged.filter((t) => t.role === 'user').length;
+			this.renderTabs();
 			if (!turns.length) this.renderEmpty(tab.scrollEl);
 			const head = tab.scrollEl.createDiv({ cls: 'codem-chat-history-head' });
 			const src = sourceLabel(card);
@@ -3921,6 +3924,8 @@ export class CodeMChatView extends ItemView {
 				merged.push(t);
 			}
 			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
+			// CC10：轮数按回显的用户问句数重算（同 loadHistory 口径，替代快照残留值）
+			tab.turnCount = merged.filter((t) => t.role === 'user').length;
 			if (!turns.length) this.renderEmpty(tab.scrollEl);
 			tab.scrollEl.scrollTop = tab.scrollEl.scrollHeight;
 		} catch {

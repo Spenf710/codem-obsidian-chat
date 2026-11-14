@@ -553,16 +553,19 @@ export async function claudeSessionCards(extra: Record<string, DoubaoSessionMeta
 // ===== Claude 会话回显解析（CC5：~/.claude/projects jsonl → Turn[]，历史面板回显正文）=====
 
 /**
- * 读取 Claude Code 会话完整轮次（历史回显用，CC5）。
- * 行结构（2026-11-13 探针实测）：
+ * 读取 Claude Code 会话完整轮次（历史回显用，CC5/CC10）。
+ * 行结构（2026-11-13/14 探针实测）：
  * - queue-operation{operation:'enqueue',content=用户原文,timestamp} → 用户消息
- *   （type:"User" 行全带 attachment=CLAUDE.md 指令注入，不是用户输入，跳过）
- * - assistant{message:{content:[{type:'thinking',thinking}|{type:'text',text}|{type:'tool_use',name,input}]}} → 助手消息
- *   （一轮可产生多条 assistant message：tool_use 中间消息 + 最终文本，连续 assistant 行合并为一轮）
- * - isSidechain=true 为子代理行，跳过
- * 大会话保护：只回显尾部 maxTurns 轮（6.3MB 会话实测数十轮，防 DOM 爆炸）。
+ * - assistant{message:{content:[thinking|text|tool_use 块]}} → 每行独立 turn（CC10：不再合并连续行——
+ *   真实执行顺序是 text → 工具 → 结果 → text 穿插，合并会导致正文与工具卡两极分堆）
+ * - User 行（message.content 数组）提取 tool_result → 独立 tool turn（渲染层 merged 管线
+ *   自动并入前一个 tool_use 卡片，还原「工具卡带结果」的真实形态；仅取 tool_result，
+ *   不取 string content——避免与 queue-operation 的用户输入重复计轮）
+ * - isSidechain=true 为子代理行跳过；带 attachment 的指令注入行无 message，自然跳过
+ * 大会话保护（CC10）：按「问」截断——保留最近 maxTurns 问（每问 user/assistant/tool 全过程），
+ * 而非按 turn 数截（独立 turn 后总量 3 倍于问数，按 turn 截会腰斩中间过程）。
  */
-export async function readClaudeSessionTurns(filePath: string, maxTurns = 80): Promise<Turn[]> {
+export async function readClaudeSessionTurns(filePath: string, maxTurns = 20): Promise<Turn[]> {
 	const turns: Turn[] = [];
 	const tsOf = (obj: Record<string, unknown>): string =>
 		typeof obj.timestamp === 'string' ? obj.timestamp : '';
@@ -590,17 +593,42 @@ export async function readClaudeSessionTurns(filePath: string, maxTurns = 80): P
 					}
 				}
 			}
-			if (!blocks.length) return;
-			// 连续 assistant 行（同轮多条 message）合并为一轮
-			const last = turns[turns.length - 1];
-			if (last && last.role === 'assistant') {
-				last.blocks.push(...blocks);
-			} else {
-				turns.push({ role: 'assistant', blocks, timestamp: tsOf(obj) });
+			// CC10：每行独立 turn，不再合并——保持 jsonl 行序（真实执行顺序）
+			if (blocks.length) turns.push({ role: 'assistant', blocks, timestamp: tsOf(obj) });
+		} else if (t === 'User') {
+			// CC10：工具结果回传行——提取 tool_result 为独立 tool turn（渲染层并入前一个工具卡）
+			const content = (obj.message as { content?: unknown } | undefined)?.content;
+			if (!Array.isArray(content)) return;
+			for (const b of content as Array<Record<string, unknown>>) {
+				if (b?.type !== 'tool_result') continue;
+				const c = b.content;
+				const rc =
+					typeof c === 'string'
+						? c
+						: Array.isArray(c)
+							? c.map((x: unknown) => (typeof x === 'string' ? x : ((x as { text?: string })?.text ?? ''))).join('')
+							: '';
+				if (rc.trim()) {
+						turns.push({ role: 'tool', blocks: [{ kind: 'tool_result', content: rc.slice(0, 3000) }], timestamp: tsOf(obj) });
+					}
 			}
 		}
 	});
-	return turns.length > maxTurns ? turns.slice(-maxTurns) : turns;
+	// CC10：按「问」截断——从尾部倒数第 (maxTurns+1) 个 user turn 处截掉更早过程（保留该问完整链路）
+	if (turns.length) {
+		let questions = 0;
+		let cut = 0;
+		for (let i = turns.length - 1; i >= 0; i--) {
+			if (turns[i].role !== 'user') continue;
+			questions++;
+			if (questions > maxTurns) {
+				cut = i + 1;
+				break;
+			}
+		}
+		return cut > 0 ? turns.slice(cut) : turns;
+	}
+	return turns;
 }
 
 /** CC7：按 sessionId 定位 Claude 会话文件（projects 活跃 + archives 归档，两处扫描）——tab 恢复回显用 */

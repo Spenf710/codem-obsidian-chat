@@ -2919,7 +2919,7 @@ button.codem-chat-stop.codem-chat-chip:disabled {
 
 /* —— 1. 消息滚动容器 —— */
 .codem-chat-messages {
-	padding: 12px 0 0;
+	padding: 12px 44px 0 0; /* CC10：右侧避让悬浮轮次导航钮（28px 钮 + 6px 边距 + 10px 间隙） */
 	gap: 12px;
 	scrollbar-width: thin;
 	scrollbar-color: var(--background-modifier-border) transparent;
