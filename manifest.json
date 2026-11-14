@@ -1,9 +1,9 @@
 {
   "id": "codem-chat",
   "name": "CodeM Chat",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "minAppVersion": "1.7.2",
-  "description": "Embeds CodeM (Feishu AI coding agent) as a sidebar chat in your vault. Your vault becomes its working directory.",
+  "description": "Tri-backend AI chat in your vault — CodeM (ACP) / Doubao CLI / Claude Code run simultaneously, with local history replay and per-tab agent binding.",
   "author": "Pengfei Sun & Ye Wei",
   "isDesktopOnly": true
 }
