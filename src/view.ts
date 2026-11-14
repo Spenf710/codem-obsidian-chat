@@ -3697,8 +3697,8 @@ export class CodeMChatView extends ItemView {
 		return lines.join('\n');
 	}
 
-	/** CC11：回显渲染（分组版）——过程类 turn（纯思考/工具块、独立工具调用）收进「执行过程」二级折叠大框，
-	 *  主时间线只留用户消息与助手正文；修复过程块逐条铺开导致的间距过大/布局稀疏（点开再看细节） */
+	/** CC12：回显渲染（分组版，Claudian 式）——过程类 turn（纯思考/工具块、独立工具调用）收进
+	 *  「思考过程」平铺区块：上下细分割线包裹 + 橙色标题（去 CC11 折叠框对话框感），条目直显、点工具行看结果 */
 	private renderHistoryTurnsGrouped(merged: Turn[], into: HTMLElement): void {
 		let procBody: HTMLElement | null = null;
 		for (const t of merged) {
@@ -3707,9 +3707,9 @@ export class CodeMChatView extends ItemView {
 				(t.role === 'assistant' && !t.blocks.some((b) => b.kind === 'text'));
 			if (isProc) {
 				if (!procBody) {
-					const details = into.createEl('details', { cls: 'codem-chat-proc' });
-					details.createEl('summary', { text: '⚙ 执行过程（点击展开）' });
-					procBody = details.createDiv({ cls: 'codem-chat-proc-body' });
+					const box = into.createDiv({ cls: 'codem-chat-proc' });
+					box.createDiv({ cls: 'codem-chat-proc-title', text: '思考过程' });
+					procBody = box.createDiv({ cls: 'codem-chat-proc-body' });
 				}
 				this.renderHistoryTurn(t, procBody);
 			} else {
@@ -3766,7 +3766,14 @@ export class CodeMChatView extends ItemView {
 					const cat = toolCategory(label);
 					const details = aiBlock.createEl('details', { cls: `codem-chat-tool is-${cat}` });
 					const summary = details.createEl('summary');
-				summary.createSpan({ cls: 'codem-chat-tool-name', text: label });
+				// CC12：Claudian 式单行条目——行首语义图标 + 名称 + 参数摘要截断（行尾对勾在 statusEl）
+				 const argSum = (b.content || '').replace(/\s+/g, ' ').slice(0, 60);
+				 const ico = summary.createSpan({ cls: 'codem-chat-tool-ico' });
+				 setIcon(ico, toolIcon(label));
+				 summary.createSpan({
+				  cls: 'codem-chat-tool-name',
+				  text: label + (argSum ? ` ${argSum}${(b.content || '').length > 60 ? '…' : ''}` : ''),
+				 });
 				 const statusEl = summary.createSpan({ cls: 'codem-chat-tool-status' });
 				 statusEl.setAttribute('data-status', 'completed');
 				 statusEl.setText('✓');
@@ -3788,7 +3795,14 @@ export class CodeMChatView extends ItemView {
 				const cat = toolCategory(label);
 				const details = mc.createEl('details', { cls: `codem-chat-tool is-${cat}` });
 				const summary = details.createEl('summary');
-				summary.createSpan({ cls: 'codem-chat-tool-name', text: label });
+				// CC12：Claudian 式单行条目——行首语义图标 + 名称 + 参数摘要截断
+				const argSum = (b.content || '').replace(/\s+/g, ' ').slice(0, 60);
+				const ico = summary.createSpan({ cls: 'codem-chat-tool-ico' });
+				setIcon(ico, toolIcon(label));
+				summary.createSpan({
+					cls: 'codem-chat-tool-name',
+					text: label + (argSum ? ` ${argSum}${(b.content || '').length > 60 ? '…' : ''}` : ''),
+				});
 				const statusEl = summary.createSpan({ cls: 'codem-chat-tool-status' });
 				statusEl.setAttribute('data-status', 'completed');
 				statusEl.setText('✓');

@@ -4590,32 +4590,41 @@ button.codem-chat-hist-archbtn:hover {
 	font-weight: 700;
 }
 
-/* CC11：回显「执行过程」二级折叠大框——思考/工具过程收进一个隐藏框，点开展示；行距收紧 */
+/* CC12：Claudian 式过程区块——平铺直显：上下细分割线包裹 + 橙色标题，无背景/圆角/折叠框（去对话框感） */
 .codem-chat-proc {
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
-	background: var(--background-secondary);
+	border-top: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding: 0 2px;
 }
-.codem-chat-proc > summary {
-	cursor: pointer;
-	padding: 4px 10px;
+.codem-chat-proc-title {
+	color: var(--color-orange, #e47148); /* Claudian 思考标题暖橙 */
+	font-weight: 600;
 	font-size: var(--font-ui-small);
-	color: var(--text-muted);
-	user-select: none;
-	list-style: none;
-}
-.codem-chat-proc > summary::before {
-	content: '▸ ';
-}
-.codem-chat-proc[open] > summary::before {
-	content: '▾ ';
+	padding: 6px 2px 4px;
 }
 .codem-chat-proc-body {
 	display: flex;
 	flex-direction: column;
-	gap: 4px; /* CC11：过程块行距收紧（消息容器级 gap 12px 导致稀疏，框内收到 4px） */
-	padding: 2px 10px 8px;
+	gap: 4px; /* 过程块行距收紧（消息容器级 gap 导致稀疏） */
+	padding: 2px 0 8px;
 }
 .codem-chat-proc-body > * {
 	margin: 0;
+}
+/* 过程区块内：内层思考折叠的重复标题隐藏，思考文本平铺直显（外层橙标题已标注） */
+.codem-chat-proc-body .codem-chat-thinking > summary {
+	display: none;
+}
+.codem-chat-proc-body .codem-chat-thinking-body {
+	display: block !important;
+}
+/* CC12：工具行首语义图标（Claudian 式：图标+名称+参数摘要+行尾对勾） */
+.codem-chat-tool-ico {
+	display: inline-flex;
+	margin-right: 4px;
+	color: var(--text-muted);
+}
+.codem-chat-tool-ico svg {
+	width: 12px;
+	height: 12px;
 }
