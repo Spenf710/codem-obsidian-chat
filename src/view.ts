@@ -149,6 +149,8 @@ interface ChatTab {
 	id: number;
 	light: 'idle' | 'running' | 'done' | 'error';
 	sessionId: string | null;
+	/** CC8：标签级后端绑定——三后端并存，同一视图内各 tab 可跑不同 Agent */
+	backend: 'codem' | 'doubao' | 'claude';
 	pendingContext: string | null;
 	busy: boolean;
 	current: RenderState | null;
@@ -255,7 +257,9 @@ function setToolStatus(el: HTMLElement, status: string): void {
 /** 右侧边栏聊天视图（ACP 架构）：流式/思考/工具/权限确认/内联候选/轮次导航/历史续接 */
 export class CodeMChatView extends ItemView {
 	plugin: CodeMChatPlugin;
-	private client: AgentBackend | null = null;
+	/** CC8：三后端实例池——标签级后端并存（CodeM 常驻 ACP / 豆包·Claude 每轮进程），按需创建互不干扰；
+	 *  settings.backend 降级为「新 tab 默认后端」 */
+	private clients: Partial<Record<'codem' | 'doubao' | 'claude', AgentBackend>> = {};
 	private inputEl!: HTMLTextAreaElement;
 	private permBtn!: HTMLButtonElement;
 	/** 权限 chip 的文案 span（v0.5.2：紧凑短词 + ▾，与智能/推理 chip 同构） */
@@ -545,12 +549,12 @@ export class CodeMChatView extends ItemView {
 			];
 			for (const it of items) {
 					menu.addItem((mi) =>
-						mi.setTitle(it.title).setIcon(it.icon).setChecked(this.plugin.settings.backend === it.id).onClick(() => {
-							if (this.plugin.settings.backend === it.id) return;
+						mi.setTitle(it.title).setIcon(it.icon).setChecked(this.activeTab.backend === it.id).onClick(() => {
+							if (this.activeTab.backend === it.id) return;
 							void (async () => {
-								this.plugin.settings.backend = it.id;
+								this.plugin.settings.backend = it.id; // CC8：同步作为新 tab 默认后端
 								await this.plugin.saveSettings();
-								this.switchBackend(); // 杀旧后端 + 清会话绑定 + 空状态重渲染 + chip 同步
+								this.switchTabBackend(this.activeTab, it.id); // 只切当前 tab，其他 tab 会话不受影响
 								new Notice(it.notice, 3500);
 							})();
 						})
@@ -758,33 +762,36 @@ export class CodeMChatView extends ItemView {
 		// 先释放全部会话再杀进程：不清 writer 会导致下次打开视图 load 同会话报 active writer
 		for (const t of this.tabs) this.releaseSession(t);
 		await new Promise((r) => window.setTimeout(r, 120));
-		this.client?.stop();
-		this.client = null;
+		// CC8：三后端实例池全量 stop
+		for (const c of Object.values(this.clients)) c?.stop();
+		this.clients = {};
 	}
 
-	private renderEmpty(into?: HTMLElement): void {
+	private renderEmpty(into?: HTMLElement, kind?: 'codem' | 'doubao' | 'claude'): void {
 		const el = (into ?? this.msgContainer).createDiv({ cls: 'codem-chat-empty' });
+		// CC8：后端跟随 tab（kind 显式传入用于单 tab 切换）；缺省用 activeTab 的绑定
+		const b = kind ?? this.activeTab?.backend ?? this.plugin.settings.backend;
 		el.setText(
-			this.plugin.settings.backend === 'doubao'
+			b === 'doubao'
 				? '正在检查豆包环境…'
-				: this.plugin.settings.backend === 'claude'
+				: b === 'claude'
 					? '正在检查 Claude 环境…'
 					: '正在检查 CodeM 环境…'
 		);
-		void this.renderEmptyContent(el);
+		void this.renderEmptyContent(el, b);
 	}
 
-	/** 空状态内容（异步）：按环境检测结果渲染引导或欢迎页 */
-	private async renderEmptyContent(el: HTMLElement): Promise<void> {
+	/** 空状态内容（异步）：按环境检测结果渲染引导或欢迎页；CC8：后端跟随 tab（kind 显式传入用于单 tab 切换） */
+	private async renderEmptyContent(el: HTMLElement, kind?: 'codem' | 'doubao' | 'claude'): Promise<void> {
 		// —— 豆包后端（S4 升级）：自检走 checkDoubaoEnvironment（存在性+版本+登录态），未装一键安装 ——
-		if (this.plugin.settings.backend === 'doubao') {
+		if ((kind ?? this.activeTab.backend) === 'doubao') {
 			const status = await checkDoubaoEnvironment(
 				this.plugin.settings.doubaoCliPath,
 				this.plugin.settings.nodePath
 			);
 			if (!el.isConnected) return; // 检测期间用户已开始对话
 			// 竞态防护（局部变量绕 TS 窄化）：检测期间切回 CodeM → 重路由到对应分支
-			const backendNow: string = this.plugin.settings.backend;
+			const backendNow: string = kind ?? this.activeTab.backend;
 			if (backendNow !== 'doubao') return void this.renderEmptyContent(el);
 			el.empty();
 			const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()];
@@ -859,7 +866,7 @@ export class CodeMChatView extends ItemView {
 			return;
 		}
 		// —— Claude Code 后端（CC 集成）：存在性检查；模型路由/登录态在 ~/.claude/settings.json（CC-Switch 管理），不在此检 ——
-		if (this.plugin.settings.backend === 'claude') {
+		if ((kind ?? this.activeTab.backend) === 'claude') {
 			if (!el.isConnected) return;
 			el.empty();
 			const cli = expandPath(this.plugin.settings.claudeCliPath || defaultClaudeCli());
@@ -975,16 +982,22 @@ export class CodeMChatView extends ItemView {
 	 * 后端切换（设置页回调，切换立即生效无需重开窗口）：释放会话、杀旧后端连接/进程、
 	 * 清会话绑定（下轮发送时按新后端新建会话），空状态按新后端立即重渲染。
 	 */
-	switchBackend(): void {
-		for (const t of this.tabs) this.releaseSession(t);
-		this.restarting = true; // 抑制旧后端 stop 触发的“服务已断开”误报（1s 后复位）
-		this.client?.stop();
-		this.client = null;
-		for (const t of this.tabs) t.sessionId = null;
+	/** CC8：切换单个 tab 的后端（三后端并存核心）——释放该 tab 会话、清 ID、重渲染该 tab 空状态；
+	 *  实例池保留（其他 tab 的会话不受影响）。旧版全局 switchBackend（杀全部会话）退役。 */
+	switchTabBackend(tab: ChatTab, kind: 'codem' | 'doubao' | 'claude'): void {
+		if (tab.backend === kind) return;
+		this.releaseSession(tab);
+		this.restarting = true; // 抑制释放/断连触发的误报（1s 后复位）
+		tab.backend = kind;
+		tab.sessionId = null;
 		window.setTimeout(() => (this.restarting = false), 1000);
-		this.updateBackendChip(); // 设置页切后端也走这里，chip 图标/文案同步
-		const el = this.msgContainer.querySelector('.codem-chat-empty');
-		if (el) void this.renderEmptyContent(el as HTMLElement);
+		tab.scrollEl.empty();
+		this.renderEmpty(tab.scrollEl, kind);
+		if (tab === this.activeTab) {
+			this.updateBackendChip(); // chip 图标/文案/占位符按新后端同步
+			this.syncStopUi();
+		}
+		this.renderTabs();
 	}
 
 	/** 右侧悬浮圆形导航按钮组（参考 Claudian）：⏫ ^ ☰ v ⏬ */
@@ -1074,6 +1087,7 @@ export class CodeMChatView extends ItemView {
 			id: ++this.tabCounter,
 			light: 'idle',
 			sessionId: null,
+			backend: this.plugin.settings.backend, // CC8：新 tab 默认后端（标签级绑定起点）
 			pendingContext: null,
 			busy: false,
 			current: null,
@@ -1263,7 +1277,7 @@ export class CodeMChatView extends ItemView {
 	 *  v0.6.0：停止按钮常驻（叶部式），空闲为禁用态而非隐藏 */
 	/** 输入框占位符（S4-fix）：文案随后端切换 */
 	private inputPlaceholder(): string {
-		const b = this.plugin.settings.backend;
+		const b = this.activeTab.backend; // CC8：占位符跟随当前 tab 后端
 		return b === 'doubao'
 			? '询问豆包，/ 技能，@ 文件…（Enter 发送）'
 			: b === 'claude'
@@ -1287,7 +1301,7 @@ export class CodeMChatView extends ItemView {
 		if (Date.now() - this.lastStopAt < 800) return; // 连按防抖：cancel 重复发无害，提示会闪
 		this.lastStopAt = Date.now();
 		// client 尚未建好时 prompt 还没发出，挂起的流程会随启动失败自然收尾
-		if (this.client && tab.sessionId) this.client.cancelSession(tab.sessionId);
+		if (tab.sessionId) this.clients[tab.backend]?.cancelSession(tab.sessionId); // CC8：按 tab 后端取实例
 		new Notice('已发送停止指令…', 2500);
 	}
 
@@ -1342,8 +1356,8 @@ export class CodeMChatView extends ItemView {
 		t.sessionId = null;
 		// v1.1.0 P1-2：释放本视图在跨视图占用表中的登记（只删自己登记的，不动其它视图）
 		if (sid && sessionOwners.get(sid) === this.viewId) sessionOwners.delete(sid);
-		if (sid && this.client) {
-			this.client.closeSession(sid).catch(() => {
+		if (sid) {
+			this.clients[t.backend]?.closeSession(sid).catch(() => {
 				// 已被占用/未知会话等场景忽略
 			});
 		}
@@ -1370,7 +1384,7 @@ export class CodeMChatView extends ItemView {
 		this.permBtn.toggleClass('is-active', mode === 'yolo');
 		// S4/CC：非 CodeM 后端——权限档位映射启动参数（豆包 --permission-mode / Claude yolo→--dangerously-skip-permissions），
 		// 切档后重建后端使下一轮生效；复用 applyModelOpts（loadSession=登记真 ID 映射，会话续聊不受影响）
-		if (this.plugin.settings.backend !== 'codem') this.applyModelOpts();
+		if (this.activeTab.backend !== 'codem') this.applyModelOpts(); // CC8：非 CodeM 后端参数重启
 	}
 
 	/** 输入历史回溯：delta<0 上一条（从最近开始），delta>0 下一条，走到底恢复空输入 */
@@ -1439,7 +1453,7 @@ export class CodeMChatView extends ItemView {
 	 *  点击弹菜单选值，空串 = 跟随配置不传参 */
 	/** 后端 chip 同步（豆包集成 S4）：快捷切换/设置页切换后更新图标与文案 */
 	private updateBackendChip(): void {
-		const backend = this.plugin.settings.backend;
+		const backend = this.activeTab?.backend ?? this.plugin.settings.backend; // CC8：chip 跟随当前 tab 后端
 		const isDoubao = backend === 'doubao';
 		const isClaude = backend === 'claude';
 		this.backendLabelEl?.setText(isDoubao ? '豆包' : isClaude ? 'Claude' : 'CodeM');
@@ -1506,13 +1520,16 @@ export class CodeMChatView extends ItemView {
 	 * 各 tab 已持有的会话重启后自动 load 恢复（重放通知因 tab.current 为空被忽略，不污染时间线）
 	 */
 	private applyModelOpts(): void {
+		// CC8：参数是后端实例级——只重建 activeTab 后端对应的实例；同后端 tab 会话恢复，其他后端 tab 不受影响
+		const kind = this.activeTab.backend;
 		const held = this.tabs
+			.filter((t) => t.backend === kind)
 			.map((t) => ({ t, sid: t.sessionId }))
 			.filter((x): x is { t: ChatTab; sid: string } => !!x.sid);
 		this.restarting = true; // 抑制 onClose 的"服务已断开"误报
-		this.client?.stop();
-		this.client = null;
-		for (const t of this.tabs) t.sessionId = null;
+		this.clients[kind]?.stop();
+		this.clients[kind] = undefined;
+		for (const { t } of held) t.sessionId = null;
 		if (!held.length) {
 			// 还没有活会话：无需恢复，下次 ensureClient 时新参数自然生效
 			this.restarting = false;
@@ -1520,7 +1537,7 @@ export class CodeMChatView extends ItemView {
 		}
 		// S4/CC：豆包/Claude 每轮新进程无需“重启”语义，文案区分；恢复逻辑通用（loadSession=登记真 ID 映射）
 		new Notice(
-			this.plugin.settings.backend === 'codem'
+			kind === 'codem'
 				? '已按新参数重启 CodeM 进程，正在恢复会话…'
 				: '已更新运行参数，下一轮对话生效',
 			3000
@@ -1689,8 +1706,8 @@ export class CodeMChatView extends ItemView {
 			new Notice('会话执行中，等本轮结束再回滚');
 			return;
 		}
-		// 豆包/Claude 后端（S3/CC）：快照回滚走 ~/.codem jsonl，非 CodeM 会话无本地快照数据源
-		if (this.plugin.settings.backend !== 'codem') {
+		// 豆包/Claude 后端（S3/CC）：快照回滚走 ~/.codem jsonl，非 CodeM 会话无本地快照数据源；CC8：按 tab 后端
+		if (tab.backend !== 'codem') {
 			new Notice('当前后端会话不支持本地快照回滚（正文存于云端/CLI 侧）');
 			return;
 		}
@@ -1853,75 +1870,81 @@ export class CodeMChatView extends ItemView {
 		this.ctxMeterEl.toggleClass('is-warn', pct >= 80);
 	}
 
-	private async ensureClient(): Promise<AgentBackend> {
-		if (this.client) return this.client;
-		// —— 豆包后端（豆包集成 S2）：每轮独立进程，无长驻连接 ——
-		if (this.plugin.settings.backend === 'doubao') {
+	/** CC8：按 tab 后端取实例（三后端并存实例池）——tab 缺省用 activeTab 的后端；池内复用，断连/参数重启时清对应槽位 */
+		private async ensureClient(tab?: ChatTab): Promise<AgentBackend> {
+		const kind = tab?.backend ?? this.activeTab?.backend ?? this.plugin.settings.backend;
+		const existing = this.clients[kind];
+			if (existing) return existing;
+			// —— 豆包后端（豆包集成 S2）：每轮独立进程，无长驻连接 ——
+			if (kind === 'doubao') {
 			const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
 			// S4 控件继承：权限三档 → --permission-mode；智能强度 → --effort。
 			// 实测（2026-11-10）：effort 取值为小写且与 CodeM 档位同名同集（none/minimal/low/medium/high/xhigh/max；
-			// 官方文档写「Low/Medium/High」为过时/错误——大写实测报 invalid_arguments），故恒等直传
-			const permMap: Record<string, string> = { manual: 'ask_always', smart: 'ask_risky', yolo: 'always_allow' };
-			this.client = new DoubaoBackend(
-				{
+				// 官方文档写「Low/Medium/High」为过时/错误——大写实测报 invalid_arguments），故恒等直传
+					const permMap: Record<string, string> = { manual: 'ask_always', smart: 'ask_risky', yolo: 'always_allow' };
+					const c = new DoubaoBackend(
+					{
 					cliPath: expandPath(this.plugin.settings.doubaoCliPath || defaultDoubaoExe()),
 					cwd,
-					permissionMode: permMap[this.permMode] ?? 'ask_risky',
-					effort: this.modelOpts.intelligence || undefined,
+				permissionMode: permMap[this.permMode] ?? 'ask_risky',
+				effort: this.modelOpts.intelligence || undefined,
 					model: this.modelOpts.model || undefined,
 				},
-				{
-					onUpdate: (sid, u) => this.handleUpdate(sid, u),
-				}
-			);
-			return this.client;
-		}
-		// —— Claude Code 后端（CC 集成）：每轮 spawn -p stream-json，无长驻连接 ——
-		if (this.plugin.settings.backend === 'claude') {
-		 const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
-		 // 权限映射：完全访问（yolo）→ --dangerously-skip-permissions；其余档走 CLI 默认。
-		 // 模型路由沿用 ~/.claude/settings.json（CC-Switch 管理），不传 --model
-		 // CC-fix：模型档位 chip → --model alias；智能强度 chip → 思考预算（low 2k / medium 8k / high 16k / xhigh 32k）
-		  const thinkMap: Record<string, number> = { low: 2048, medium: 8192, high: 16384, xhigh: 31999 };
-		   this.client = new ClaudeBackend(
-		   {
-		   cliPath: expandPath(this.plugin.settings.claudeCliPath || defaultClaudeCli()),
-		  cwd,
-		    skipPermissions: this.permMode === 'yolo',
-		    model: this.modelOpts.claudeModel || undefined,
-		    thinkingTokens: this.modelOpts.intelligence ? thinkMap[this.modelOpts.intelligence] : undefined,
-		   },
-		  {
-		   onUpdate: (sid, u) => this.handleUpdate(sid, u),
-		  }
-		 );
-		 return this.client;
-		}
-		this.client = new AcpClient(
-			this.pluginOpts(),
 			{
+			onUpdate: (sid, u) => this.handleUpdate(sid, u),
+		}
+		);
+		this.clients.doubao = c;
+		 return c;
+		 }
+		 // —— Claude Code 后端（CC 集成）：每轮 spawn -p stream-json，无长驻连接 ——
+		 if (kind === 'claude') {
+		  const cwd = (this.app.vault.adapter as unknown as { getBasePath(): string }).getBasePath();
+		   // 权限映射：完全访问（yolo）→ --dangerously-skip-permissions；其余档走 CLI 默认。
+		   // CC-fix：模型档位 chip → --model alias；智能强度 chip → 思考预算（low 2k / medium 8k / high 16k / xhigh 32k）
+		   const thinkMap: Record<string, number> = { low: 2048, medium: 8192, high: 16384, xhigh: 31999 };
+		  const c = new ClaudeBackend(
+		    {
+		    cliPath: expandPath(this.plugin.settings.claudeCliPath || defaultClaudeCli()),
+		    cwd,
+		   skipPermissions: this.permMode === 'yolo',
+		  model: this.modelOpts.claudeModel || undefined,
+		   thinkingTokens: this.modelOpts.intelligence ? thinkMap[this.modelOpts.intelligence] : undefined,
+		  },
+		 {
+		 onUpdate: (sid, u) => this.handleUpdate(sid, u),
+		}
+		);
+			this.clients.claude = c;
+			return c;
+				}
+				const acp = new AcpClient(
+				this.pluginOpts(),
+				{
 				onUpdate: (sid, u) => this.handleUpdate(sid, u),
 				onPermissionRequest: (params, respond) => this.handlePermission(params, respond),
 				onClose: (code) => {
-				// 参数重启流程（applyModelOpts）自行接管复位，跳过误报
-				if (this.restarting) return;
-				// 连接是全部 tab 共享的，断连复位所有 tab 的执行状态
-				this.client = null;
-					for (const t of this.tabs) {
+					// 参数重启流程（applyModelOpts）自行接管复位，跳过误报
+						if (this.restarting) return;
+						// CC8：只复位 codem 槽位与 codem 后端的 tab（豆包/Claude 每轮独立进程，互不影响）
+							this.clients.codem = undefined;
+							for (const t of this.tabs) {
+							if (t.backend !== 'codem') continue;
 						t.sessionId = null;
-						if (t.busy) {
-							t.busy = false;
-							t.current = null;
-							t.light = 'idle';
-						}
-					}
-					new Notice('CodeM 服务已断开，下次发送时会自动重新连接。', 6000);
-					this.renderTabs();
-					this.setStatusLight(this.activeTab.light);
-				},
+					if (t.busy) {
+					t.busy = false;
+					t.current = null;
+					t.light = 'idle';
+				}
 			}
-		);
-		return this.client;
+		new Notice('CodeM 服务已断开，下次发送时会自动重新连接。', 6000);
+		this.renderTabs();
+	this.setStatusLight(this.activeTab.light);
+	   },
+	  }
+	 );
+	 this.clients.codem = acp;
+	 return acp;
 	}
 
 	// ===== v0.8.0（叶部式）队列面板：全量列表 + Steer + 清空 + 逐条编辑/删除/重排 =====
@@ -2043,7 +2066,7 @@ export class CodeMChatView extends ItemView {
 		// CC3：按后端分策略——强制收尾（杀进程）仅保留给 CodeM ACP（防最终 response 丢失 UI 永挂）；
 		// 豆包/Claude 每轮独立进程：进程退出自然收尾（close 兜底），不存在“response 丢失”场景，
 		// 强杀反而误杀 30-40 分钟的云端长任务（-p 无流式，期间必然无 lastActivity 更新）。
-		const perTurnBackend = this.plugin.settings.backend;
+		const perTurnBackend = tab.backend; // CC8：跟随发起轮次的 tab（后台 tab 不受 activeTab 切换影响）
 		const forceFinish = perTurnBackend === 'codem';
 		tab.lastActivity = Date.now();
 		let stallNotified = false;
@@ -2070,7 +2093,7 @@ export class CodeMChatView extends ItemView {
 			if (forceFinish && stallNotified && Date.now() - tab.lastActivity > 360000) {
 				window.clearInterval(watchdog);
 				tab.turnSeq++;
-				if (tab.sessionId) this.client?.cancelSession(tab.sessionId);
+				if (tab.sessionId) this.clients.codem?.cancelSession(tab.sessionId); // CC8：实例池取 codem（forceFinish 仅 codem）
 				this.stopTypewriter(tab);
 				// 强制收尾前回收挂起审批（服务端还在等应答）；长时间无响应按失败置灯，不再复用 done
 				if (tab.current) {
@@ -2118,7 +2141,7 @@ export class CodeMChatView extends ItemView {
 		}, 1000);
 
 		try {
-			const client = await this.ensureClient();
+			const client = await this.ensureClient(tab); // CC8：按发起 tab 的后端取实例（后台 tab 不受 activeTab 切换影响）
 			if (!tab.sessionId) {
 				tab.sessionId = await client.newSession();
 				if (tab === this.activeTab) this.updateSidEl();
@@ -2141,15 +2164,15 @@ export class CodeMChatView extends ItemView {
 			const reason = await client.prompt(tab.sessionId, blocks);
 			// 本轮已被 watchdog 强制收尾接管：丢弃迟到结果，不再渲染时间线/标题
 			if (seq !== tab.turnSeq) return;
-			// —— 豆包/Claude（S3/CC）：占位 ID → 真 ID 同步 + 本地索引（历史面板数据源）——
-			if (this.plugin.settings.backend !== 'codem' && tab.sessionId) {
+			// —— 豆包/Claude（S3/CC）：占位 ID → 真 ID 同步 + 本地索引（历史面板数据源）——CC8：按 tab 后端
+			if (tab.backend !== 'codem' && tab.sessionId) {
 				const realId = client.getRealSessionId(tab.sessionId);
 				if (realId && realId !== tab.sessionId) {
 					tab.sessionId = realId; // 后续轮 / 历史索引 / 持久化统一用真 ID
 					if (tab === this.activeTab) this.updateSidEl();
 				}
 				const store =
-					this.plugin.settings.backend === 'doubao'
+					tab.backend === 'doubao'
 						? this.plugin.settings.doubaoSessions
 						: this.plugin.settings.claudeSessions;
 				const prev = store[tab.sessionId];
@@ -2317,8 +2340,8 @@ export class CodeMChatView extends ItemView {
 	 * 依据首轮用户问题 + 助手回复摘要；结果持久化到 settings.sessionTitles。
 	 */
 	private async generateTitle(tab: ChatTab, userText: string): Promise<void> {
-		// 豆包/Claude 后端：无头标题调用依赖 codem CLI，跳过（历史列表回退首问显示）
-		if (this.plugin.settings.backend !== 'codem') return;
+		// 豆包/Claude 后端：无头标题调用依赖 codem CLI，跳过（历史列表回退首问显示）；CC8：按 tab 后端
+		if (tab.backend !== 'codem') return;
 		try {
 			const reply = tab.mdBuffer.replace(/\s+/g, ' ').slice(0, 600);
 			const ask = userText.replace(/\s+/g, ' ').replace(/["'`]/g, ' ').slice(0, 200);
@@ -3314,20 +3337,20 @@ export class CodeMChatView extends ItemView {
 		this.histEl.createDiv({
 			cls: 'codem-hist-loading',
 			text:
-				this.plugin.settings.backend === 'doubao'
+				this.activeTab.backend === 'doubao'
 					? '读取豆包会话索引…'
-					: this.plugin.settings.backend === 'claude'
+					: this.activeTab.backend === 'claude'
 						? '扫描 ~/.claude/projects 全量会话…'
 						: '扫描 ~/.codem/sessions …',
 		});
 		this.histEl.show();
 		this.histOpen = true;
 		try {
-			// 豆包（S3）：本地索引；Claude（CC2）：扫 ~/.claude/projects 全量会话 jsonl（含终端/其他入口产生），插件索引作合并兑底；CodeM 扫 jsonl
+			// 豆包（S3）：本地索引；Claude（CC2）：扫 ~/.claude/projects 全量会话 jsonl（含终端/其他入口产生），插件索引作合并兑底；CodeM 扫 jsonl；CC8：按当前 tab 后端
 			this.allCards =
-				this.plugin.settings.backend === 'doubao'
+				this.activeTab.backend === 'doubao'
 					? doubaoSessionCards(this.plugin.settings.doubaoSessions ?? {})
-					: this.plugin.settings.backend === 'claude'
+					: this.activeTab.backend === 'claude'
 						? await claudeSessionCards(this.plugin.settings.claudeSessions ?? {})
 						: await listCodemSessions();
 		} catch (e) {
@@ -3779,6 +3802,7 @@ export class CodeMChatView extends ItemView {
 	getState(): Record<string, unknown> {
 		const tabs = this.tabs.map((t) => ({
 			sessionId: t.sessionId,
+			backend: t.backend, // CC8：标签级后端随快照恢复
 			pinned: t.pinned,
 			label: t.label,
 			turnCount: t.turnCount,
@@ -3789,7 +3813,7 @@ export class CodeMChatView extends ItemView {
 	/** 恢复视图状态：重建 tab 槽位并标记待恢复会话（内容在下次 ensureClient 后 load 回来） */
 	async setState(state: unknown, result: unknown): Promise<void> {
 		const s = state as Record<string, unknown>;
-		const tabs = s.codemChatTabs as Array<{ sessionId: string | null; pinned?: boolean; label?: string | null; turnCount?: number }> | undefined;
+		const tabs = s.codemChatTabs as Array<{ sessionId: string | null; backend?: 'codem' | 'doubao' | 'claude'; pinned?: boolean; label?: string | null; turnCount?: number }> | undefined;
 		if (!Array.isArray(tabs) || !tabs.length) return;
 		try {
 			// 清掉默认 tab，按快照重建
@@ -3798,6 +3822,7 @@ export class CodeMChatView extends ItemView {
 			for (const t of tabs.slice(0, this.plugin.settings.maxWindows || 3)) {
 				const tab = this.createTab();
 				tab.sessionId = t.sessionId ?? null;
+				tab.backend = t.backend ?? this.plugin.settings.backend; // CC8：恢复 tab 的后端绑定（旧快照无此字段走默认）
 				tab.pinned = !!t.pinned;
 				tab.label = t.label ?? null;
 				tab.turnCount = t.turnCount ?? 0;
@@ -3822,7 +3847,7 @@ export class CodeMChatView extends ItemView {
 	/** 恢复单个 tab 的会话：优先原生 load，失败转软续接快照（复用 loadHistory 机制的数据层） */
 	private async restoreTabSession(tab: ChatTab): Promise<void> {
 		try {
-			const client = await this.ensureClient();
+			const client = await this.ensureClient(tab); // CC8：按 tab 后端取实例
 			await client.loadSession(tab.sessionId!);
 			sessionOwners.set(tab.sessionId!, this.viewId); // v1.1.0 P1-2：登记跨视图占用
 			// load 成功：重放通知因 tab.current 为空被忽略，不污染时间线
@@ -3839,7 +3864,7 @@ export class CodeMChatView extends ItemView {
 	 *  --resume 写回旧会话文件）；豆包无本地正文，提示条明确“恢复的是旧会话”防认知错位。 */
 	private async replayTabHistory(tab: ChatTab): Promise<void> {
 		try {
-			const backend = this.plugin.settings.backend;
+			const backend = tab.backend; // CC8：恢复回显按 tab 自己的后端
 			let turns: Turn[] | null = null;
 			if (backend === 'claude' && tab.sessionId) {
 				// CC7：Claude——sessionId 定位本地 jsonl（projects 活跃 + archives 归档），尾部轮次回显

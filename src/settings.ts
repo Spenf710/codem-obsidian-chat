@@ -17,7 +17,7 @@ import {
 import type { DoubaoSessionMeta } from './codem-sessions';
 
 export interface CodeMSettings {
-	/** 对话后端：codem（ACP 长驻双向流）/ doubao（每轮 -p 单次调用）/ claude（stream-json 流式，CC 集成） */
+	/** 默认后端（CC8 标签级并存）：新 tab 的默认 Agent；各 tab 独立绑定 codem/doubao/claude，三后端可同时运行 */
 	backend: 'codem' | 'doubao' | 'claude';
 	/** codem.cmd 完整路径，~ 自动展开为用户目录 */
 	codemCliPath: string;
@@ -94,10 +94,10 @@ export class CodeMSettingTab extends PluginSettingTab {
 		// CC-fix：分区样式作用域（驾驶舱设计语言 emoji 分组标题）
 		containerEl.addClass('codem-chat-settings-page');
 
-		// —— 对话后端（豆包集成 S2 / CC 集成）：切换立即生效 ——
+		// —— 默认后端（豆包集成 S2 / CC 集成 / CC8 标签级并存）：新会话标签的默认后端 ——
 		new Setting(containerEl)
-			.setName('对话后端')
-			.setDesc('CodeM（ACP 流式）/ 豆包 CLI / Claude Code（stream-json）；切换立即生效（聊天框底部也有快捷切换 chip）')
+			.setName('默认后端（新标签）')
+			.setDesc('CodeM（ACP 流式）/ 豆包 CLI / Claude Code（stream-json）；新会话标签的默认后端——三后端可在聊天框内并存，当前标签用底部 chip 切换（不影响其他标签的会话）')
 			.addDropdown((dd) =>
 				dd
 					.addOption('codem', 'CodeM（ACP）')
@@ -107,13 +107,9 @@ export class CodeMSettingTab extends PluginSettingTab {
 					.onChange(async (v) => {
 						this.plugin.settings.backend = v as 'codem' | 'doubao' | 'claude';
 						await this.plugin.saveSettings();
-						// 切换立即生效：通知所有打开的聊天视图杀旧后端并按新后端重渲染（无需重开窗口）
-						for (const leaf of this.app.workspace.getLeavesOfType('codem-chat-view')) {
-							const view = leaf.view as { switchBackend?: () => void } | undefined;
-							view?.switchBackend?.();
-						}
-					})
-		);
+						// CC8：仅作为新 tab 默认后端——标签级后端并存，不再清杀现有会话；当前 tab 用底部 chip 切换
+						})
+							);
 
 		// ===== 分区标题（驾驶舱设计语言：emoji 分组，设置项按 agent 归属排列） =====
 		new Setting(containerEl).setHeading().setName('💬 CodeM（ACP）');
