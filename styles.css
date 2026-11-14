@@ -951,12 +951,7 @@
 	align-items: center;
 	gap: 6px;
 }
-.codem-chat-tool summary::before {
-	content: "🔧";
-	font-size: 13px;
-	flex-shrink: 0;
-	opacity: 0.8;
-}
+/* CC14-fix：基础 emoji ::before 同步退役（行首统一 SVG 语义图标，渲染层注入） */
 
 /* Bash 类：橙色（命令执行）——CC14：emoji ::before 图标退役（行首统一 SVG 语义图标），保留配色 */
 .codem-chat-tool.is-bash {
@@ -4401,19 +4396,11 @@ button.codem-chat-hist-archbtn:hover {
 	display: none !important;
 }
 
-/* 图标：CSS ::before 伪元素按 is-* 分类渲染 */
+/* CC14-fix：emoji ::before 全量退役（第三组 .codem-chat-root !important 规则——上一轮漏网真凶）；
+   行首统一用渲染层注入的 .codem-chat-tool-ico SVG 语义图标 */
 .codem-chat-root .codem-chat-tool > summary::before {
-	content: "🔧" !important;
-	font-size: 13px !important;
-	flex-shrink: 0 !important;
-	opacity: 0.8 !important;
+	content: none !important;
 }
-.codem-chat-root .codem-chat-tool.is-bash > summary::before { content: "💻" !important; }
-.codem-chat-root .codem-chat-tool.is-edit > summary::before { content: "✏️" !important; }
-.codem-chat-root .codem-chat-tool.is-read > summary::before { content: "📄" !important; }
-.codem-chat-root .codem-chat-tool.is-search > summary::before { content: "🔍" !important; }
-.codem-chat-root .codem-chat-tool.is-web > summary::before { content: "🌐" !important; }
-.codem-chat-root .codem-chat-tool.is-other > summary::before { content: "⚙️" !important; opacity: 0.5 !important; }
 
 /* 工具名：monospace + 正常色 */
 .codem-chat-root .codem-chat-tool .codem-chat-tool-name {
