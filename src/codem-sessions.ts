@@ -521,8 +521,8 @@ export async function claudeSessionCards(extra: Record<string, DoubaoSessionMeta
 		cards.push({
 			sessionId,
 			filePath,
-			// 📦 前缀标记归档会话（CLI 已移出 projects，--resume 大概率失败，仅回显浏览）
-			firstPrompt: (archived ? '📦 ' : '') + firstPrompt.replace(/\s+/g, ' ').slice(0, 80),
+			// 📦 前缀标记归档会话；CC11：首问摘要先压缩（linked_content 拼接全文 → 真实输入），再截 80 字
+			firstPrompt: (archived ? '📦 ' : '') + compressClaudeUserInput(firstPrompt).replace(/\s+/g, ' ').slice(0, 80),
 			startTime: '',
 			lastTime: new Date(st.mtimeMs).toISOString(),
 			userTurns: 0,
@@ -553,6 +553,28 @@ export async function claudeSessionCards(extra: Record<string, DoubaoSessionMeta
 // ===== Claude 会话回显解析（CC5：~/.claude/projects jsonl → Turn[]，历史面板回显正文）=====
 
 /**
+ * CC11：压缩超长用户输入（回显用）——终端/Claudian 会话的 enqueue 常为拼接全文：
+ * linked_content 标签 + 引用展开 + 历史消息 + 末尾真实输入。规则：
+ * ① <linked_content path="x"/> → 文件名占位；② 拼接格式取末段「User: 」后的真实输入；
+ * ③ 仍超长（终端粘贴日志等）截断加标记。插件自己的会话 enqueue 本就是短输入，原样保留。
+ */
+function compressClaudeUserInput(text: string): string {
+	let s = text;
+	// ① 引用笔记标签 → 文件名占位（去标签体，保引用可读）
+	s = s.replace(/<linked_content\s+path="([^"]+)"\s*\/??>/g, '［引用笔记：$1］');
+	// ② Claudian 历史拼接：多段「User: 真实输入」，末段才是当次输入（其余为回放历史全文）
+	if (s.length > 400) {
+		const parts = s.split(/\]?\s*User:\s/);
+		if (parts.length > 1) s = parts[parts.length - 1];
+	}
+	// ③ 兜底截断（终端粘贴的安装日志等无分段）
+	if (s.length > 400) {
+		s = s.slice(0, 400) + `\n…（已压缩显示，原文 ${text.length} 字）`;
+	}
+	return s.trim();
+}
+
+/**
  * 读取 Claude Code 会话完整轮次（历史回显用，CC5/CC10）。
  * 行结构（2026-11-13/14 探针实测）：
  * - queue-operation{operation:'enqueue',content=用户原文,timestamp} → 用户消息
@@ -575,7 +597,8 @@ export async function readClaudeSessionTurns(filePath: string, maxTurns = 20): P
 		if (t === 'queue-operation' && obj.operation === 'enqueue') {
 			const text = typeof obj.content === 'string' ? obj.content : '';
 			if (text.trim() && !text.startsWith('<')) {
-				turns.push({ role: 'user', blocks: [{ kind: 'text', content: text }], timestamp: tsOf(obj) });
+				// CC11：超长输入压缩（终端/Claudian 拼接全文 → 只留真实输入 + 文件名占位）
+				turns.push({ role: 'user', blocks: [{ kind: 'text', content: compressClaudeUserInput(text) }], timestamp: tsOf(obj) });
 			}
 		} else if (t === 'assistant') {
 			const content = (obj.message as { content?: unknown[] } | undefined)?.content;

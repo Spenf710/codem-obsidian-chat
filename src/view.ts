@@ -1041,8 +1041,11 @@ export class CodeMChatView extends ItemView {
 	/** 会话目录浮层：列出全部用户轮次（编号 + 首行摘要），点击跳转 */
 	private openDir(): void {
 		if (this.turnCount === 0) {
-			new Notice('当前会话还没有轮次');
-			return;
+			// CC11：豆包会话历史轮次在云端（无本地锚点）——不再拦死面板，打开显示云端占位（可感知而非“显示不出来”）
+			if (this.activeTab.backend !== 'doubao' || !this.activeTab.sessionId) {
+				new Notice('当前会话还没有轮次');
+				return;
+			}
 		}
 		if (!this.dirEl) this.dirEl = this.msgArea.createDiv({ cls: 'codem-chat-dir' });
 		this.buildDirList();
@@ -1066,6 +1069,18 @@ export class CodeMChatView extends ItemView {
 				this.goToTurn(n);
 				this.closeDir();
 			};
+		}
+		// CC11：豆包会话历史轮次在云端（无本地正文/锚点）——目录追加云端占位条目，明确可续接语义
+		if (this.activeTab.backend === 'doubao' && this.activeTab.sessionId) {
+			const ds = this.plugin.settings.doubaoSessions?.[this.activeTab.sessionId];
+			const row = list.createDiv({ cls: 'codem-chat-dir-item' });
+			row.createSpan({ cls: 'codem-chat-dir-n', text: '☁' });
+			row.createSpan({
+				cls: 'codem-chat-dir-snip',
+				text: ds
+					? `豆包云端历史（约 ${ds.userTurns ?? '?'} 问）——不本地回显，载入后直接续聊`
+					: '豆包云端历史——不本地回显，载入后直接续聊',
+			});
 		}
 	}
 
@@ -3638,7 +3653,7 @@ export class CodeMChatView extends ItemView {
 			 }
 			 merged.push(t);
 			}
-			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
+			this.renderHistoryTurnsGrouped(merged, tab.scrollEl); // CC11：过程块收进二级折叠大框
 			// CC10：轮数按用户问句数统计（与轮次目录/goToTurn 同口径），修正快照残留值与实际回显不符
 			tab.turnCount = merged.filter((t) => t.role === 'user').length;
 			this.renderTabs();
@@ -3680,6 +3695,28 @@ export class CodeMChatView extends ItemView {
 			if (total > 6000) break;
 		}
 		return lines.join('\n');
+	}
+
+	/** CC11：回显渲染（分组版）——过程类 turn（纯思考/工具块、独立工具调用）收进「执行过程」二级折叠大框，
+	 *  主时间线只留用户消息与助手正文；修复过程块逐条铺开导致的间距过大/布局稀疏（点开再看细节） */
+	private renderHistoryTurnsGrouped(merged: Turn[], into: HTMLElement): void {
+		let procBody: HTMLElement | null = null;
+		for (const t of merged) {
+			const isProc =
+				t.role === 'tool' ||
+				(t.role === 'assistant' && !t.blocks.some((b) => b.kind === 'text'));
+			if (isProc) {
+				if (!procBody) {
+					const details = into.createEl('details', { cls: 'codem-chat-proc' });
+					details.createEl('summary', { text: '⚙ 执行过程（点击展开）' });
+					procBody = details.createDiv({ cls: 'codem-chat-proc-body' });
+				}
+				this.renderHistoryTurn(t, procBody);
+			} else {
+				procBody = null;
+				this.renderHistoryTurn(t, into);
+			}
+		}
 	}
 
 	/** v1.0.2 P0：历史会话渲染——DOM 对齐叶部 CSS（与实时对话 handleToolEvent 同构） */
@@ -3923,7 +3960,7 @@ export class CodeMChatView extends ItemView {
 				}
 				merged.push(t);
 			}
-			for (const t of merged) this.renderHistoryTurn(t, tab.scrollEl);
+			this.renderHistoryTurnsGrouped(merged, tab.scrollEl); // CC11：过程块收进二级折叠大框
 			// CC10：轮数按回显的用户问句数重算（同 loadHistory 口径，替代快照残留值）
 			tab.turnCount = merged.filter((t) => t.role === 'user').length;
 			if (!turns.length) this.renderEmpty(tab.scrollEl);
