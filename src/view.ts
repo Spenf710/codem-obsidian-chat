@@ -3506,6 +3506,8 @@ export class CodeMChatView extends ItemView {
 		} else {
 			this.renderHistRows(list, this.histItems, archived);
 		}
+		// CC17-fix：弹框容器复用（empty 重建不重置滚动——布局合并保留旧 scrollTop），每次渲染显式归顶
+		this.histEl.scrollTop = 0;
 		const active = this.histEl.querySelector('.codem-suggest-item.is-active');
 		active?.scrollIntoView({ block: 'nearest' });
 	}
@@ -3684,7 +3686,7 @@ export class CodeMChatView extends ItemView {
 				`📜 ${this.sessionTitle(card).slice(0, 40)}（${src} · ${card.userTurns} 问）` +
 					(tab.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
 			);
-			tab.scrollEl.scrollTop = 0; // CC17：打开历史会话从顶部开始看（旧版滚到底部，且被延迟布局卡在中间）
+			tab.scrollEl.scrollTop = tab.scrollEl.scrollHeight; // CC17 误改回滚：滚到底部（载入即续聊看最新）；真正要修的是历史列表弹框
 		} finally {
 			tab.busy = false;
 			// busy 复位后再同步状态灯/输入框提示：setStatusLight 内部的 syncStopUi 读 busy，
