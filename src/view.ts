@@ -3506,10 +3506,12 @@ export class CodeMChatView extends ItemView {
 		} else {
 			this.renderHistRows(list, this.histItems, archived);
 		}
-		// CC17-fix：弹框容器复用（empty 重建不重置滚动——布局合并保留旧 scrollTop），每次渲染显式归顶
+		// CC17-fix2：归顶三保险——显式 scrollTop=0 + 渲染后下一帧再写一次（防布局时序/滚动锚定恢复旧位）；
+		// scrollIntoView 废弃（打开/过滤时第一项天然在顶部；键盘导航可见性由 renderHistRows 行级 scrollIntoView 负责）
 		this.histEl.scrollTop = 0;
-		const active = this.histEl.querySelector('.codem-suggest-item.is-active');
-		active?.scrollIntoView({ block: 'nearest' });
+		window.setTimeout(() => {
+			if (this.histOpen && this.histEl) this.histEl.scrollTop = 0;
+		}, 0);
 	}
 
 	/** 渲染历史会话行（含归档按钮），供分组/平铺两种模式复用 */

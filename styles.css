@@ -466,6 +466,7 @@
 	right: 0;
 	max-height: 320px;
 	overflow-y: auto;
+	overflow-anchor: none; /* CC17-fix2：禁用滚动锚定，防浏览器渲染时自动恢复旧滚动位 */
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 10px;
