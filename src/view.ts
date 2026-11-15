@@ -2534,10 +2534,12 @@ export class CodeMChatView extends ItemView {
 		}
 	}
 
-	/** 轮次锚点：记录序号与摘要供导航按钮组/目录浮层使用 */
-	private addTurnAnchor(userBlock: HTMLElement): void {
-		this.turnCount++;
-		const n = this.turnCount;
+	/** 轮次锚点：记录序号与摘要供导航按钮组/目录浮层使用；CC18：tab 可选——回显渲染时计数写目标 tab
+	 *  （防 activeTab 污染与锚点编号错乱：多 tab 重载时渲染非激活 tab 不再累加 activeTab 计数） */
+	private addTurnAnchor(userBlock: HTMLElement, tab?: ChatTab): void {
+		const t = tab ?? this.activeTab;
+		t.turnCount++;
+		const n = t.turnCount;
 		userBlock.setAttribute('data-codem-turn', String(n));
 		userBlock.setAttribute('data-codem-snip', (userBlock.textContent ?? '').replace(/\s+/g, ' ').slice(0, 60));
 		if (this.dirOpen) this.buildDirList();
@@ -3677,8 +3679,10 @@ export class CodeMChatView extends ItemView {
 			 }
 			 merged.push(t);
 			}
-			this.renderHistoryTurnsGrouped(merged, tab.scrollEl); // CC11：过程块收进二级折叠大框
-			// CC10：轮数按用户问句数统计（与轮次目录/goToTurn 同口径），修正快照残留值与实际回显不符
+			// CC18：渲染前计数归零（锚点从 1 编号——快照/旧值残留导致目录编号从 56 起算的错乱）+ 传 tab（防 activeTab 污染）
+			tab.turnCount = 0;
+			this.renderHistoryTurnsGrouped(merged, tab.scrollEl, tab); // CC11：过程块收进二级折叠大框
+			// CC10：轮数按用户问句数统计（与轮次目录/goToTurn 同口径）——归零累加后已一致，双保险保留
 			tab.turnCount = merged.filter((t) => t.role === 'user').length;
 			this.renderTabs();
 			if (!turns.length) this.renderEmpty(tab.scrollEl);
@@ -3723,14 +3727,16 @@ export class CodeMChatView extends ItemView {
 
 	/** CC13：回显渲染（分组版，Claudian 式嵌套）——过程类 turn（纯思考/工具块、独立工具调用）收进
 	 *  「已完成工作」外层可折叠项（默认收起，轻量单行）：展开后 → 思考过程（自身可折叠）→ 工具执行（每条可展开结果） */
-	private renderHistoryTurnsGrouped(merged: Turn[], into: HTMLElement): void {
+	/** CC13：回显渲染（分组版，Claudian 式嵌套）——过程类 turn（纯思考/工具块、独立工具调用）收进
+	 *  「已完成工作」外层可折叠项（默认收起，轻量单行）：展开后 → 思考过程（自身可折叠）→ 工具执行（每条可展开结果）；CC18：透传 tab（锚点计数写目标 tab） */
+	private renderHistoryTurnsGrouped(merged: Turn[], into: HTMLElement, tab?: ChatTab): void {
 		let group: Turn[] = [];
 		const flushGroup = (): void => {
 			if (!group.length) return;
 			const work = into.createEl('details', { cls: 'codem-chat-work' });
 			work.createEl('summary', { cls: 'codem-chat-work-title', text: `已完成工作（${group.length} 项）` });
 			const body = work.createDiv({ cls: 'codem-chat-work-body' });
-			for (const t of group) this.renderHistoryTurn(t, body);
+			for (const t of group) this.renderHistoryTurn(t, body, tab);
 			group = [];
 		};
 		for (const t of merged) {
@@ -3741,19 +3747,19 @@ export class CodeMChatView extends ItemView {
 				group.push(t);
 			} else {
 				flushGroup();
-				this.renderHistoryTurn(t, into);
+				this.renderHistoryTurn(t, into, tab);
 			}
 		}
 		flushGroup();
 	}
 
 	/** v1.0.2 P0：历史会话渲染——DOM 对齐叶部 CSS（与实时对话 handleToolEvent 同构） */
-		private renderHistoryTurn(t: Turn, into?: HTMLElement): void {
+		private renderHistoryTurn(t: Turn, into?: HTMLElement, tab?: ChatTab): void {
 			const mc = into ?? this.msgContainer; // v1.0.8 P0-1：落点跟随发起 tab 的容器，防切 tab 串写
 			if (t.role === 'user') {
 			// jsonl 记录的是完整 prompt（含注入全文/快照/图片 base64），回显前清洗为提问本身
 		const userBlock = this.renderUserMessage(this.cleanPromptForDisplay(t.blocks.map((b) => b.content).join('\n\n')), [], mc, t.timestamp);
-		 this.addTurnAnchor(userBlock);
+		 this.addTurnAnchor(userBlock, tab); // CC18：计数与锚点编号写目标 tab
 			} else if (t.role === 'assistant') {
 			const aiBlock = mc.createDiv({ cls: 'codem-chat-msg codem-chat-assistant' });
 			const thinks = t.blocks.filter((b) => b.kind === 'thinking');
@@ -4002,9 +4008,12 @@ export class CodeMChatView extends ItemView {
 				}
 				merged.push(t);
 			}
-			this.renderHistoryTurnsGrouped(merged, tab.scrollEl); // CC11：过程块收进二级折叠大框
-			// CC10：轮数按回显的用户问句数重算（同 loadHistory 口径，替代快照残留值）
+			// CC18：渲染前计数归零（锚点从 1 编号，修快照残留值起算的编号错乱）+ 传 tab（防 activeTab 污染）
+			tab.turnCount = 0;
+			this.renderHistoryTurnsGrouped(merged, tab.scrollEl, tab); // CC11：过程块收进二级折叠大框
+			// CC10：轮数按回显的用户问句数重算（同 loadHistory 口径）——归零累加后已一致，双保险保留；CC18 补 renderTabs 刷新徽章
 			tab.turnCount = merged.filter((t) => t.role === 'user').length;
+			this.renderTabs();
 			if (!turns.length) this.renderEmpty(tab.scrollEl);
 			tab.scrollEl.scrollTop = tab.scrollEl.scrollHeight;
 		} catch {
