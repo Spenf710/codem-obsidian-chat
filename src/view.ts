@@ -3684,7 +3684,7 @@ export class CodeMChatView extends ItemView {
 				`📜 ${this.sessionTitle(card).slice(0, 40)}（${src} · ${card.userTurns} 问）` +
 					(tab.sessionId ? ' · 已续接，可直接继续提问' : ' · 快照续聊：历史将随下一条消息附带')
 			);
-			tab.scrollEl.scrollTop = tab.scrollEl.scrollHeight;
+			tab.scrollEl.scrollTop = 0; // CC17：打开历史会话从顶部开始看（旧版滚到底部，且被延迟布局卡在中间）
 		} finally {
 			tab.busy = false;
 			// busy 复位后再同步状态灯/输入框提示：setStatusLight 内部的 syncStopUi 读 busy，
